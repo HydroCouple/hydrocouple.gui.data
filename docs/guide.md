@@ -16,9 +16,50 @@ Open a georeferenced model, then select **Data → USGS sites…** or
    `data/external/preview-layers/`, records the reviewed area, intended catalogue query and actual response origin,
    and adds it through the GUI SDK as a normal feature layer.
 
-Changing the viewport in viewport mode, the chosen polygon, the boundary source,
-its filters/selection, or catalogue source clears the review. Preview again before
-saving. The feature export uses the reviewed geometry and selected IDs.
+Changing the chosen area or catalogue source clears the review. Preview again before
+saving. The feature export uses the frozen reviewed geometry and selected IDs.
+
+## Typed review ownership and invalidation
+
+This package requires the installed GUI SDK **1.5** and its typed lifecycle,
+view and activity services. A review belongs to an exact Ready **open session**
+and load generation. Two open models may share a saved project UUID; switching
+between them never transfers a review. Focusing a utility document keeps the
+existing model context. Closing, failed loading or replacing that context stops
+pending work and clears its review.
+
+| Native change | Current viewport review | Loaded polygon review |
+| --- | --- | --- |
+| View extent, canvas CRS or resize | Clear | Keep when the chosen polygon is unchanged |
+| Chosen boundary geometry, source, CRS, filter, selection or field schema | Not a viewport input | Clear and refresh boundary choices |
+| Chosen boundary title, visibility or other source metadata | Not a viewport input | Conservatively clear and refresh choices |
+| Chosen attachment removal or detach/reattach, even with the same native ID | Keep the viewport review | Clear; the replacement has a new runtime identity |
+| Unrelated layer addition/removal/change | Refresh choices; keep the area | Refresh choices; keep the unchanged chosen attachment |
+| Layer style/order, result variable/playback, dock/command or utility focus | Keep | Keep |
+| Model context/load replacement or closure | Clear and cancel | Clear and cancel |
+
+The plugin subscribes before its initial snapshot. It keeps a separate adoption
+cutoff for each explicit review, so a queued change that happened before the
+review began cannot clear the new review. Exact geometry, feature eligibility,
+attachment identity, available source/filter/CRS metadata and the complete selected
+FID fingerprint are checked again before applying results, caching, previewing,
+retrying or exporting. Selected IDs are read in bounded pages; holes and multipart
+geometry remain exact.
+
+Typed notifications arrive after native changes commit. An action that races an
+undelivered model revision is therefore refused conservatively, even when the
+current geometry appears unchanged: a source might have been replaced, or geometry
+might have changed and changed back. This can require a fresh preview when an
+unrelated change is still pending. Once irrelevant notifications have been delivered,
+qualified detailed or unambiguous evidence can reconcile and preserve the review.
+A posted callback alone does not prove dispatch is complete inside a nested event
+loop; broad layer/model notices cannot establish that evidence. Preserved polygon
+previews redraw after a safe viewport/CRS reconciliation. A late reply or job completion
+cannot restore an invalidated review or write its cache/export.
+
+These rules cover the current **catalogue metadata** package. Terrain payloads,
+observation imports and design storms remain later DS2–DS4 packages with their own
+invalidation and qualification gates.
 
 Network access follows the GUI's HTTPS/offline policy. **Cancel** stops requests,
 scheduled retries and parsing jobs. Catalogue responses are bounded to 20 MiB;

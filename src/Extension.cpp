@@ -45,6 +45,16 @@ public:
      * @return False if any required contribution could not be registered. */
     bool initialize(ExtensionHost *host, QString *error) override
     {
+        auto *lifetime = host ? host->lifetime() : nullptr;
+        if (!lifetime || !qobject_cast<IEventSourceV2 *>(lifetime) ||
+            !qobject_cast<IEventSourceV3 *>(lifetime) ||
+            !qobject_cast<IEventSourceV4 *>(lifetime) ||
+            !qobject_cast<IViewControlsV1 *>(lifetime)) {
+            if (error)
+                *error = tr(
+                    "Data sources requires SDK 1.5 lifecycle, view, activity and selected-feature services.");
+            return false;
+        }
         mHost = host;
         auto *sites = new QAction(tr("USGS sites…"), host->lifetime());
         auto *terrain = new QAction(tr("Elevation footprints…"), host->lifetime());

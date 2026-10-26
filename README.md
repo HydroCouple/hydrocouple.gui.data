@@ -1,7 +1,7 @@
 # OpenSWMM Data Sources
 
 An independently built native plugin for `openswmm.gui`, consuming the installed
-GUI SDK 1.1, matching Qt, and GDAL. The SDK and plugin host remain in the GUI repo.
+GUI SDK 1.5, matching Qt, and GDAL. The SDK and plugin host remain in the GUI repo.
 
 This first consumer implements catalogue review: monitoring-site points and 3DEP
 product footprints, a current-viewport or loaded-polygon area, exact intersection
@@ -24,7 +24,10 @@ application kit. An existing GUI dependency prefix can be reused with
 
 Add the built plugin directory in **Tools → Plugins…**, then restart the GUI.
 The **Data** ribbon opens the **Data sources** dock. See [the guide](docs/guide.md).
-All new C++ interfaces and source files use Doxygen comments.
+All new C++ interfaces and source files use Doxygen comments. The plugin requires
+SDK 1.5 typed lifecycle, view and UI activity services. Review ownership uses the
+per-open session and load generation, including when two models share a saved UUID.
+The guide documents which changes clear a review and how pending changes are fenced.
 
 Development plans and verification data remain local under `workplans/` and
 `tests/verification/`; do not commit them. No remote repository is configured.

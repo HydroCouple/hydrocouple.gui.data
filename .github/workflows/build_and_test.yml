@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       gui_sdk_ref:
-        description: GUI ref that provides the matching SDK (1.1 or newer)
+        description: GUI ref that provides the matching SDK (1.5 or newer)
         default: swmm6_gui
         type: string
 permissions:
@@ -50,5 +50,5 @@ jobs:
             -DCMAKE_PREFIX_PATH="$PWD/.ci/gui-sdk;$QT_ROOT_DIR"
       - name: Build
         run: cmake --build build --parallel 2
-      - name: Offline catalogue tests
+      - name: Offline catalogue and preview lifecycle tests
         run: ctest --test-dir build --output-on-failure
