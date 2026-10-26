@@ -15,6 +15,9 @@ version, not evidence of a release tag.
 
 ### Added
 
+- Canonical source repository, citation/homepage metadata and runtime project link at
+  [HydroCouple/hydrocouple.gui.data](https://github.com/HydroCouple/hydrocouple.gui.data).
+
 - Independently built Qt plugin using the installed GUI SDK (initially 1.1; now 1.5).
 - Data ribbon, catalogue-preview dock and preview-limit preferences.
 - Offline public-SDK preview lifecycle, stale-completion and invalidation acceptance tests.

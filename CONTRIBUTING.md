@@ -2,9 +2,11 @@
 
 Thank you for your interest in contributing to **openswmm.gui.data**! This document outlines the governance model, contribution workflow, and standards that keep the project healthy, reproducible, and scientifically rigorous. Please read it carefully before opening an issue, submitting a pull request, or proposing a major change.
 
-This is the initial standalone Data Sources repository. Hosted issue/PR services,
-automated review and archival releases are not assumed to exist until configured
-and published by the maintainer. Contacts and agreements below are usable now.
+The standalone Data Sources repository is hosted at
+[HydroCouple/hydrocouple.gui.data](https://github.com/HydroCouple/hydrocouple.gui.data).
+Its plugin identity remains `openswmm.gui.data`. Automated review, repository
+protections and archival releases require separate configuration and verification.
+Contacts and contributor agreements below remain applicable.
 
 ---
 
@@ -81,7 +83,7 @@ All contributors must sign the project **Contributor License Agreement (CLA)** b
 
 ### Signing the CLA
 
-CLA Assistant automation is not enabled for this local repository. Sign by email using [CLA.md §9](CLA.md#9-how-to-sign), or, when a pull request service is available, post the following comment on your PR:
+Until CLA Assistant automation is configured, sign by email using [CLA.md §9](CLA.md#9-how-to-sign), or post the following comment on your pull request:
 
 > I have read the CLA Document and I hereby sign the CLA.
 
@@ -241,8 +243,9 @@ Before requesting review, confirm that your PR:
 
 ## 12. Continuous Integration & Automated Testing
 
-Repository workflows describe verification gates; they become hosted CI only
-when a maintainer publishes and enables them. Required checks must pass before
+Repository workflows describe verification gates for the hosted repository.
+Check Actions for their execution and results; repository protection rules and
+required checks need separate configuration. Required checks must pass before
 merge, or an existing failure must be clearly documented and reviewed.
 
 The checks relevant to this plugin are:
@@ -471,8 +474,9 @@ implemented or planned capability they affect.
 Local implementation workplans are kept in `workplans/` or `plans/` and are not
 committed. Discuss a major scope or provider-contract change before implementing
 it; record the accepted approach and validation criteria in a local workplan.
-Once a hosted issue/discussion service exists, it can be used for public roadmap
-proposals. Until then, contact the Technical Manager through the project address.
+Use the hosted repository for public roadmap proposals through the issue or
+discussion services enabled by the maintainer. The Technical Manager remains
+available through the project address.
 
 ---
 
@@ -489,4 +493,4 @@ Harassment, personal attacks, or exclusionary behavior of any kind will not be t
 
 ---
 
-*This document is maintained by the Technical Manager of openswmm.gui.data (currently [@cbuahin](https://github.com/cbuahin)). Last updated: October 25, 2026.*
+*This document is maintained by the Technical Manager of openswmm.gui.data (currently [@cbuahin](https://github.com/cbuahin)). Last updated: October 26, 2026.*

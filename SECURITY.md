@@ -17,9 +17,10 @@ is published; experimental builds are not a long-term support commitment.
 address used by the OpenSWMM Gymnasium project. If that channel is unavailable,
 contact [support@hydrocouple.org](mailto:support@hydrocouple.org).
 
-If private GitHub security advisories are enabled for a future hosted repository,
-its Security tab may also be used. No hosted Data repository or enabled advisory
-workflow is assumed by this document.
+The source repository is [HydroCouple/hydrocouple.gui.data](https://github.com/HydroCouple/hydrocouple.gui.data).
+If private GitHub security advisories are enabled there, its Security tab may also
+be used. Source publication alone does not establish that an advisory workflow is
+enabled; the private email contacts above remain available.
 
 Please include, where possible:
 

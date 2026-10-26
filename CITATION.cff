@@ -7,6 +7,8 @@ authors:
     given-names: Caleb
 version: 0.1.0
 license: GPL-3.0-or-later
+repository-code: https://github.com/HydroCouple/hydrocouple.gui.data
+url: https://github.com/HydroCouple/hydrocouple.gui.data
 abstract: >-
   Native OpenSWMM GUI extension for reviewing monitoring sites and elevation
   product footprints within a current viewport or a loaded boundary polygon.

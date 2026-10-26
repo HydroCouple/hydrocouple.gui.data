@@ -35,7 +35,7 @@ public:
                 "Review monitoring sites and elevation footprints",
                 "0.1.0",
                 "OpenSWMM",
-                {},
+                "https://github.com/HydroCouple/hydrocouple.gui.data",
                 "GPL-3.0-or-later",
                 {"data", "catalogue", "preview"}};
     }

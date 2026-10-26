@@ -1,7 +1,8 @@
 # Releasing openswmm.gui.data
 
-This repository is in initial development at version 0.1.0. No release, public
-repository URL, DOI or signing automation is established by these files.
+This repository is in initial development at version 0.1.0 and is hosted at
+[HydroCouple/hydrocouple.gui.data](https://github.com/HydroCouple/hydrocouple.gui.data).
+Source publication does not establish a release, DOI or signing automation.
 
 ## Prepare a release
 
@@ -30,17 +31,18 @@ repository URL, DOI or signing automation is established by these files.
    data. No user model or private site/boundary data belongs in a release bundle.
 8. Have the Technical Manager review release artifacts, sign/tag the approved
    version, and publish using the project's agreed release process. Record the
-   public URL and archival identifier only after they exist.
+   release/archive URLs and archival identifiers only after they exist.
 
 ## Repository workflows
 
 The included workflows validate documentation, build the installed-SDK consumer
-and offline catalogue tests on Linux, and provide CodeQL/Scorecard scaffolding.
-They have not run on GitHub for this local repository. They do not configure
-branch protection, a CLA bot, public hosting, a Pages deployment or a release.
+and offline catalogue/preview lifecycle tests on Linux, and provide CodeQL/Scorecard
+scaffolding. Workflow files do not establish a passing GitHub run: check Actions
+results for the published revision. These workflows do not configure branch
+protection, a CLA bot, a Pages deployment or a release.
 
 The C++ workflow stages the SDK from the GUI reference `swmm6_gui` by default;
-manual runs can choose another ref. That ref must already supply SDK 1.1. A
+manual runs can choose another ref. That ref must already supply SDK 1.5. A
 SDK-only package identifies the public Qt boundary but does not qualify a binary
 against a complete GUI/engine kit. Full GUI and Windows/macOS acceptance remain
 release gates.

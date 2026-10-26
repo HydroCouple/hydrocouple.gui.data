@@ -1,6 +1,7 @@
 {
   "name": "openswmm-gui-data",
   "version-string": "0.1.0",
+  "homepage": "https://github.com/HydroCouple/hydrocouple.gui.data",
   "dependencies": [
     "gdal"
   ],
