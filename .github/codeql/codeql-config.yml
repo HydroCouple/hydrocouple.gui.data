@@ -1,0 +1,12 @@
+name: openswmm.gui.data CodeQL config
+queries:
+  - uses: security-extended
+paths-ignore:
+  - build/**
+  - build-*/**
+  - cmake-build*/**
+  - .ci/**
+  - docs/**
+  - workplans/**
+  - plans/**
+  - tests/verification/**

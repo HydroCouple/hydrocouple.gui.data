@@ -1,0 +1,8 @@
+{
+  "name": "openswmm-gui-data",
+  "version-string": "0.1.0",
+  "dependencies": [
+    "gdal"
+  ],
+  "license": "GPL-3.0-or-later"
+}

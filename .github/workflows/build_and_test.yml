@@ -1,0 +1,54 @@
+name: C++ build and offline tests
+on:
+  push:
+    branches: [main, master, dev]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      gui_sdk_ref:
+        description: GUI ref that provides the matching SDK (1.1 or newer)
+        default: swmm6_gui
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout GUI SDK source
+        uses: actions/checkout@v4
+        with:
+          repository: HydroCouple/openswmm.gui
+          ref: ${{ inputs.gui_sdk_ref || 'swmm6_gui' }}
+          path: .ci/gui-sdk-source
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libgdal-dev libgl1-mesa-dev libxkbcommon-x11-0 libxcb-cursor0
+      - name: Install matching Qt kit
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.9.3'
+          cache: true
+      - name: Stage the installed public SDK
+        shell: bash
+        run: |
+          cmake -S .ci/gui-sdk-source -B .ci/sdk-build -G Ninja \
+            -DSWMMVIS_SDK_ONLY=ON -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
+          cmake --install .ci/sdk-build --component GuiSdk --prefix "$PWD/.ci/gui-sdk"
+      - name: Configure independent plugin
+        shell: bash
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$PWD/.ci/gui-sdk;$QT_ROOT_DIR"
+      - name: Build
+        run: cmake --build build --parallel 2
+      - name: Offline catalogue tests
+        run: ctest --test-dir build --output-on-failure

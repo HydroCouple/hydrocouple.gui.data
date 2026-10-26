@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "Please cite the software version and commit used in your work."
+type: software
+title: "OpenSWMM Data Sources (openswmm.gui.data)"
+authors:
+  - family-names: Buahin
+    given-names: Caleb
+version: 0.1.0
+license: GPL-3.0-or-later
+abstract: >-
+  Native OpenSWMM GUI extension for reviewing monitoring sites and elevation
+  product footprints within a current viewport or a loaded boundary polygon.
+keywords:
+  - OpenSWMM
+  - hydrology
+  - GIS
+  - data preview

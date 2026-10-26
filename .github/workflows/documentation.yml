@@ -1,0 +1,32 @@
+name: Documentation
+on:
+  push:
+    branches: [main, master, dev]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Doxygen
+        run: sudo apt-get update && sudo apt-get install -y doxygen
+      - name: Generate themed documentation
+        working-directory: docs
+        run: |
+          doxygen Doxyfile
+          test -s html/index.html
+          test -s html/doxygen-awesome.css
+          test -s html/manual.css
+          test -s html/doxygen-awesome-darkmode-toggle.js
+      - name: Upload documentation for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: openswmm-data-docs
+          path: docs/html
+          if-no-files-found: error

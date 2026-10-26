@@ -1,0 +1,11 @@
+build/
+workplans/
+plans/
+tests/verification/
+.DS_Store
+docs/html/
+build-*/
+cmake-build*/
+.vscode/
+.idea/
+.ci/

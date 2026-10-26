@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Run from docs/: doxygen Doxyfile. Matches the GUI theme and output convention.
+PROJECT_NAME = "OpenSWMM Data Sources"
+PROJECT_NUMBER = 0.1.0
+PROJECT_BRIEF = "Monitoring-site and elevation-footprint previews for OpenSWMM GUI"
+PROJECT_LOGO = custom/swmmvis.png
+OUTPUT_DIRECTORY = .
+HTML_OUTPUT = html
+CREATE_SUBDIRS = YES
+CREATE_SUBDIRS_LEVEL = 8
+CASE_SENSE_NAMES = NO
+FULL_PATH_NAMES = YES
+STRIP_FROM_PATH = ..
+INPUT = ../README.md ../src guide.md ../AUTHORS.md ../CONTRIBUTING.md \
+        ../SECURITY.md ../PRIVACY.md ../CODE_OF_CONDUCT.md ../CLA.md ../CCLA.md \
+        ../CLA-SIGNATORIES.md ../CHANGELOG.md ../RELEASING.md
+FILE_PATTERNS = *.hpp *.cpp *.md
+RECURSIVE = YES
+EXTRACT_ALL = NO
+EXTRACT_PRIVATE = NO
+JAVADOC_AUTOBRIEF = YES
+MARKDOWN_ID_STYLE = GITHUB
+ALIASES = "license=\par License^^"
+QUIET = YES
+WARN_IF_UNDOCUMENTED = YES
+WARN_IF_DOC_ERROR = YES
+WARN_IF_INCOMPLETE_DOC = YES
+WARN_NO_PARAMDOC = YES
+WARN_AS_ERROR = FAIL_ON_WARNINGS
+GENERATE_HTML = YES
+GENERATE_LATEX = NO
+HAVE_DOT = NO
+USE_MDFILE_AS_MAINPAGE = ../README.md
+LAYOUT_FILE = DoxygenLayout.xml
+HTML_HEADER = custom/html/header.html
+HTML_EXTRA_STYLESHEET = custom/css/doxygen-awesome.css custom/css/manual.css
+HTML_EXTRA_FILES = custom/js/doxygen-awesome-darkmode-toggle.js \
+                   custom/js/doxygen-awesome-fragment-copy-button.js \
+                   custom/js/doxygen-awesome-interactive-toc.js \
+                   custom/js/doxygen-awesome-paragraph-link.js \
+                   custom/js/doxygen-awesome-tabs.js ../LICENSE ../NOTICE
+HTML_COLORSTYLE = LIGHT
+HTML_COLORSTYLE_HUE = 220
+HTML_COLORSTYLE_SAT = 174
+HTML_COLORSTYLE_GAMMA = 84
+HTML_DYNAMIC_MENUS = YES
+HTML_DYNAMIC_SECTIONS = NO
+HTML_CODE_FOLDING = YES
+HTML_COPY_CLIPBOARD = YES
+DISABLE_INDEX = NO
+GENERATE_TREEVIEW = YES
+FULL_SIDEBAR = NO
+SEARCHENGINE = YES
+TOC_INCLUDE_HEADINGS = 5
+

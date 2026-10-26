@@ -1,0 +1,55 @@
+name: Scorecard supply-chain security
+
+on:
+  # Some checks (branch protection, code review enforcement) only run when
+  # the workflow is triggered by a branch-protection-rule change.
+  branch_protection_rule:
+  # Weekly scan so new scorecard checks land here as they ship.
+  schedule:
+    - cron: "20 7 * * 1"
+  push:
+    branches: ["main", "master", "dev"]
+  workflow_dispatch:
+
+permissions: read-all
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    permissions:
+      # Needed to upload the SARIF results to Security > Code scanning.
+      security-events: write
+      # Read access only — no write to repo contents.
+      contents: read
+      actions: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Run analysis
+        uses: ossf/scorecard-action@v2.4.1
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          # Keep analysis local to workflow artifacts until public publication
+          # is explicitly configured by the repository owner.
+          publish_results: false
+
+      # Persist the SARIF for 5 days so it can be downloaded and inspected
+      # outside the GitHub Security tab.
+      - name: Upload artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: SARIF file
+          path: results.sarif
+          retention-days: 5
+
+      # Surface findings in Security > Code scanning alongside CodeQL.
+      - name: Upload to code scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif

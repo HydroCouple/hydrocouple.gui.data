@@ -1,0 +1,5 @@
+# Bundled upstream theme assets retain their original formatting.
+docs/custom/
+build/
+build-*/
+cmake-build*/

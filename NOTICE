@@ -1,0 +1,75 @@
+OpenSWMM Data Sources (openswmm.gui.data)
+Copyright 2026 HydroCouple contributors
+
+The original plugin code is licensed under GNU GPL version 3 or later.
+See LICENSE for the full terms. Contributor ownership remains with each author.
+
+GUI HOST AND DOCUMENTATION ASSETS
+
+This plugin uses the installed SDK from openswmm.gui:
+https://github.com/HydroCouple/openswmm.gui
+The documentation header, layout, manual stylesheet and SWMMVis logo are adapted
+from that GPL-3.0-or-later project. This notice does not imply that this repository
+contains the GUI host or the OpenSWMM engine.
+
+DOXYGEN AWESOME
+
+The documentation theme CSS and JavaScript are from Doxygen Awesome. Their
+original MIT notices remain embedded in each copied file. The notice follows:
+
+Doxygen Awesome
+https://github.com/jothepro/doxygen-awesome-css
+
+MIT License
+
+Copyright (c) 2021 - 2023 jothepro
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+MATERIAL ICONS
+
+The Doxygen Awesome dark-mode and paragraph-link scripts credit Material icons
+from https://fonts.google.com/icons under the Apache License, Version 2.0:
+https://www.apache.org/licenses/LICENSE-2.0.html
+Those inline attribution notices are retained; a copy of the Apache terms is
+in LICENSES/Apache-2.0.txt. These icons remain subject to
+their upstream terms rather than the plugin’s GPL notice.
+
+GITHUB CORNER
+
+The documentation header’s corner graphic derives from GitHub Corners by
+Tim Holman (https://tholman.com/github-corners/), as credited by the inherited
+GUI header. The graphic does not identify a Data repository remote.
+
+DEPENDENCIES AND SERVICE DATA
+
+Qt and GDAL are separately licensed by their respective copyright holders.
+Dependencies are declared in CMakeLists.txt and vcpkg.json. Preserve the
+applicable license notices when redistributing dependency binaries.
+
+Catalogue records originate with the service identified in each response and
+export. Availability of records through a public API does not change their
+source attribution, service terms or metadata. The plugin’s license covers
+its implementation, not an ownership claim over service data.
+
+COMMUNITY DOCUMENTS
+
+CODE_OF_CONDUCT.md is adapted from Contributor Covenant 3.0, stewarded by the
+Organization for Ethical Source and licensed under CC BY-SA 4.0. The full
+attribution and license link remain in that file.
