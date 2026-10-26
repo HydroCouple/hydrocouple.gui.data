@@ -27,7 +27,10 @@ jobs:
           echo "${DOXYGEN_SHA256}  ${RUNNER_TEMP}/doxygen.tar.gz" | sha256sum --check
           tar --extract --gzip --file "$RUNNER_TEMP/doxygen.tar.gz" \
             --directory "$RUNNER_TEMP" "doxygen-${DOXYGEN_VERSION}/bin/doxygen"
-          test "$("$RUNNER_TEMP/doxygen-${DOXYGEN_VERSION}/bin/doxygen" --version)" = "$DOXYGEN_VERSION"
+          doxygen_version="$("$RUNNER_TEMP/doxygen-${DOXYGEN_VERSION}/bin/doxygen" --version)"
+          printf '::notice::Doxygen version: %s\n' "$doxygen_version"
+          # Official binaries may append their source revision in parentheses.
+          test "${doxygen_version%% *}" = "$DOXYGEN_VERSION"
           echo "$RUNNER_TEMP/doxygen-${DOXYGEN_VERSION}/bin" >> "$GITHUB_PATH"
       - name: Generate themed documentation
         working-directory: docs
