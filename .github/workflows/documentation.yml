@@ -14,8 +14,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Doxygen
-        run: sudo apt-get update && sudo apt-get install -y doxygen
+      - name: Install Doxygen 1.17.0
+        # Match the version used to validate the GUI-derived layout and theme.
+        # Distribution packages can lag behind the required layout/config tags.
+        env:
+          DOXYGEN_VERSION: 1.17.0
+          DOXYGEN_SHA256: 75419ef4f446fc1c24ef12514b574e66e898ee6f527c6ae2ad84f91a905823c2
+        run: |
+          curl --fail --location --retry 3 \
+            --output "$RUNNER_TEMP/doxygen.tar.gz" \
+            "https://github.com/doxygen/doxygen/releases/download/Release_1_17_0/doxygen-${DOXYGEN_VERSION}.linux.bin.tar.gz"
+          echo "${DOXYGEN_SHA256}  ${RUNNER_TEMP}/doxygen.tar.gz" | sha256sum --check
+          tar --extract --gzip --file "$RUNNER_TEMP/doxygen.tar.gz" \
+            --directory "$RUNNER_TEMP" "doxygen-${DOXYGEN_VERSION}/bin/doxygen"
+          test "$("$RUNNER_TEMP/doxygen-${DOXYGEN_VERSION}/bin/doxygen" --version)" = "$DOXYGEN_VERSION"
+          echo "$RUNNER_TEMP/doxygen-${DOXYGEN_VERSION}/bin" >> "$GITHUB_PATH"
       - name: Generate themed documentation
         working-directory: docs
         run: |
