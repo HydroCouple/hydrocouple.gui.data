@@ -1,0 +1,8 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Copyright (c) 2026 Caleb Buahin. All rights reserved. -->
+<!-- Generic monitoring-gage glyph; not an agency logo. -->
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect x="8" y="2" width="8" height="14" rx="1" stroke="#777777" stroke-width="1.6"/>
+  <path d="M8 5h4M8 8h3M8 11h4M8 14h3" stroke="#777777" stroke-width="1.6" stroke-linecap="round"/>
+  <path d="M2 18c2-2 3-2 5 0s3 2 5 0 3-2 5 0 3 2 5 0M2 21c2-2 3-2 5 0s3 2 5 0 3-2 5 0 3 2 5 0" stroke="#777777" stroke-width="1.6" stroke-linecap="round"/>
+</svg>

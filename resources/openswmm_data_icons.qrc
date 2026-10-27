@@ -1,0 +1,8 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Copyright (c) 2026 Caleb Buahin. All rights reserved. -->
+<RCC>
+  <qresource prefix="/openswmm/data/icons">
+    <file alias="usgs-gage.svg">icons/usgs-gage.svg</file>
+    <file alias="dem.svg">icons/dem.svg</file>
+  </qresource>
+</RCC>

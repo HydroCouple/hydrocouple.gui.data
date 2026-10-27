@@ -1,8 +1,8 @@
 /**
  * @file PreviewPanel.hpp
- * @brief Model/view/controller dock for reviewing sites and elevation footprints.
+ * @brief Compact area, catalogue review and observation/raster download dock.
  * @details Area and result identities are frozen together. Relevant model/view/layer changes
- * invalidate the review before another export. Network requests use the host policy client;
+ * invalidate the review before another export or download. Network requests use the host policy client;
  * copied geometry/response parsing runs in cancellable host jobs. The host owns this widget.
  * @author Caleb Buahin <caleb.buahin@gmail.com>
  * @date 2026
@@ -11,12 +11,14 @@
  */
 #pragma once
 #include "Catalog.hpp"
+#include "OperationProgress.hpp"
 #include <sdk/ExtensionHost.hpp>
 #include <sdk/IProject.hpp>
 #include <sdk/IEventSourceV2.hpp>
 #include <sdk/IEventSourceV3.hpp>
 #include <sdk/IEventSourceV4.hpp>
 #include <sdk/IViewControlsV1.hpp>
+#include <sdk/ITimeSeriesLayersV1.hpp>
 #include <QPointer>
 #include <QWidget>
 
@@ -27,10 +29,15 @@ class QPushButton;
 class QTableView;
 class QStandardItemModel;
 class QNetworkReply;
+class QLineEdit;
+class QDateEdit;
 
 namespace OpenSWMM::Data
 {
-/** @brief Hosted catalogue review UI; persistent GIS export requires a current reviewed area. */
+class CatalogueFilter;
+class PayloadDownload;
+struct PayloadResult;
+/** @brief Hosted review/download UI; payload transfers and GIS export require a current reviewed area. */
 class PreviewPanel final : public QWidget
 {
     Q_OBJECT
@@ -44,13 +51,23 @@ public:
     /** @brief Select a catalogue adapter from a ribbon command.
      * @param[in] source Monitoring locations or elevation footprints. */
     void setSource(Source source);
-    /** @brief Cancel outstanding metadata work without publishing incomplete results. */
+    /** @brief Cancel outstanding previews, payload transfers and jobs without publishing partial data files. */
     void cancel();
 public slots:
+    /** @brief Clear only disposable catalogue graphics and rows, cancelling any pending preview.
+     * @note Saved downloads, exported feature layers, native time-series layers and rasters remain.
+     * Refused during an accepted payload transfer or native import; Cancel controls those operations. */
+    void clearPreview();
     /** @brief Preview an explicitly chosen saved response using the currently chosen area/source.
      * @param[in] path Existing JSON response file, bounded to 20 MiB; no network request is made.
      * @note Also supports deterministic offline GUI conformance without private host headers. */
     void loadCatalogue(const QString &path);
+    /** @brief Download the selected reviewed records into a new child of the chosen folder.
+     * @param[in] directory User-chosen destination; existing files are never overwritten.
+     * @note Uses the visible USGS period/parameter controls. Raster results are added only
+     * while the original model and review remain current. Observation files preserve source
+     * units and timestamps; downloading does not alter model time series. */
+    void downloadTo(const QString &directory);
 
 private:
     /** @brief Owning source stamp; sequence and revision are separate from semantic content. */
@@ -73,8 +90,9 @@ private:
     /** @brief Refresh up to 5000 eligible boundary choices, preserving the chosen FID. */
     void refreshFeatures();
     /** @brief Cancel pending work and discard all review authority.
-     * @param[in] message Optional user-facing explanation. */
-    void invalidate(const QString &message = {});
+     * @param[in] message Optional user-facing explanation.
+     * @param[in] retainDisplay Keep an adopted catalogue for inspection, without export authority. */
+    void invalidate(const QString &message = {}, bool retainDisplay = false);
     /** @brief Capture a coherent current source stamp without granting historical authority.
      * @param[out] context Exact owning current source values.
      * @param[out] error Optional unavailable/ambiguous/stale-context detail.
@@ -113,10 +131,30 @@ private:
      * @param[in] items Complete exact-area filtered records.
      * @param[in] more True when the server advertises additional catalogue records. */
     void apply(const QList<Item> &items, bool more);
-    /** @brief Refresh transient geometry and export eligibility for the current review. */
+    /** @brief Refresh transient geometry and export eligibility, awaiting qualified native layer revisions. */
     void updateOverlay();
+    /** @brief Apply the local saved-property predicate without changing the service query. */
+    void filterResults();
+    /** @brief Show every saved property of the current visible catalogue location. */
+    void updateAttributes();
+    /** @brief Refresh visible, total and visible-selected counts. */
+    void updateCounts();
+    /** @brief Copy visible records in stable source order, independent of table sorting.
+     * @return Owning records matching the current local predicate. */
+    QList<Item> visibleItems() const;
+    /** @brief Check display ownership against current native readiness, without granting export.
+     * @return True only for the same Ready session and accepted load as the bound model. */
+    bool displayIsCurrent() const;
     /** @brief Persist the frozen area/selected records only after an authoritative source check. */
     void exportSelection();
+    /** @brief Choose an output folder, then download selected observations or raster tiles. */
+    void downloadSelection();
+    /** @brief Begin guarded native import after a complete observation download.
+     * @param[in] result Completed descriptor and immutable import identity.
+     * @return True when the method owns the resulting progress/refusal message. */
+    bool importObservations(const PayloadResult &result);
+    /** @brief Show only controls relevant to the selected source and area mode. */
+    void updateControls();
     /** @brief Open cached raw metadata matching the exact current area/query. */
     void useCache();
     /** @brief Copy selected catalogue records independently of table sorting.
@@ -129,8 +167,10 @@ private:
      * @return Stable SHA-256 hexadecimal key. */
     QString cacheKey() const;
     /** @brief Refresh control availability without granting new source authority.
-     * @param[in] busy Metadata retrieval/parsing is still pending. */
+     * @param[in] busy Preview retrieval/parsing is pending; active payload work also keeps controls busy. */
     void setBusy(bool busy);
+    OperationProgress mPreviewProgress; ///< Enclosing metadata request/cache/parse progress.
+    OperationProgress mImportProgress; ///< Native publication progress independent of downloaded files.
     Sdk::ExtensionHost *mHost;       ///< Borrowed host; use only while mHostLifetime survives.
     QPointer<QObject> mHostLifetime; ///< Guard against host destruction during queued/native calls.
     QPointer<QObject> mModelLifetime;               ///< Exact bound native model lifetime.
@@ -138,16 +178,25 @@ private:
     Sdk::IEventSourceV3 *mViewSource = nullptr;     ///< Borrowed runtime attachment source.
     Sdk::IEventSourceV4 *mActivitySource = nullptr; ///< Borrowed actual document-focus source.
     Sdk::IViewControlsV1 *mViewControls = nullptr;  ///< Borrowed paged selected-FID query.
-    Sdk::IModelInstance *mInstance = nullptr;       ///< Borrowed exact Ready facade.
-    Sdk::IProject *mProject = nullptr;              ///< Borrowed project belonging to mInstance.
+    Sdk::ITimeSeriesLayersV1 *mTimeSeriesLayers =
+        nullptr;                     ///< Borrowed native dataset import service.
+    Sdk::IJob *mImportJob = nullptr; ///< Borrowed host-owned native preparation job.
+    bool mImportPending =
+        false; ///< Keep controls/cancellation active until native publication finishes.
+    Sdk::IModelInstance *mInstance = nullptr; ///< Borrowed exact Ready facade.
+    Sdk::IProject *mProject = nullptr;        ///< Borrowed project belonging to mInstance.
     QUuid mSessionId; ///< Per-open identity; persistent instance UUIDs are not unique sessions.
     quint64 mLoadGeneration = 0;   ///< Exact bound accepted load.
     quint64 mInitialWatermark = 0; ///< Immutable subscribe-before-snapshot initialization cutoff.
     quint64 mObservedRevision =
         0; ///< Maximum revision supported by specific/unambiguous delivered evidence.
-    bool mStartingPreview = false; ///< Refuse nested explicit starts until the entire startup path returns.
+    bool mStartingPreview =
+        false; ///< Refuse nested explicit starts until the entire startup path returns.
     bool mRebaseScheduled = false; ///< At most one posted unrelated-revision reconciliation.
-    bool mOverlayRefreshPending = false; ///< Redraw frozen polygon graphics only after safe rebasing.
+    bool mOverlayRefreshPending =
+        false; ///< Redraw frozen polygon graphics only after safe rebasing.
+    bool mAwaitingDisplayRevision =
+        false; ///< A native preview write awaits detailed source evidence before export.
     ReviewContext mReview;    ///< Frozen review authority; never synthesized from callback row IDs.
     QComboBox *mSource;       ///< Catalogue provider selector.
     QComboBox *mAreaMode;     ///< Viewport or loaded-boundary mode.
@@ -157,21 +206,41 @@ private:
     QCheckBox *mSelectedOnly; ///< Restrict boundary choices to selected native features.
     QLabel *mStatus;          ///< Current plain-text progress/refusal explanation.
     QPushButton *mPreview;    ///< Explicit metadata request action.
+    QPushButton *mClear; ///< Explicit disposal of preview-only graphics and catalogue selection.
     QPushButton *mCancel;     ///< Pending request/job cancellation action.
     QPushButton *mCache;      ///< Exact matching cached-response action.
     QPushButton *mRecorded;   ///< Explicit saved-catalogue action.
     QPushButton *mExport;     ///< Frozen selected-record GIS export action.
-    QTableView *mTable;       ///< Catalogue selection/sorting view.
-    QStandardItemModel *mModel;     ///< Complete currently reviewed catalogue records.
-    QPointer<QNetworkReply> mReply; ///< Active policy-controlled reply.
-    Sdk::IJob *mJob = nullptr;      ///< Borrowed host-retained current parsing job.
-    QList<Item> mItems;             ///< Owning complete exact-area records.
-    QJsonObject mArea;              ///< Frozen reviewed geometry used for parsing/provenance.
-    QJsonObject mProvenance;        ///< Actual response origin, separate from intended query.
-    QUrl mQuery;                    ///< Frozen intended metadata query.
-    quint64 mGeneration = 0; ///< Plugin work generation; increments on cancellation/invalidation.
-    bool mValid = false;     ///< Complete results match the retained review authority.
-    bool mBusy = false;      ///< Metadata request/parsing is pending.
+    QPushButton *mDownload;   ///< Primary source-specific payload download action.
+    PayloadDownload *mPayload = nullptr; ///< Owned cancellable payload transfer controller.
+    QWidget *mBoundaryControls;          ///< Hidden unless a loaded boundary polygon is chosen.
+    QWidget *mTerrainControls;           ///< Terrain resolution, hidden for USGS observations.
+    QWidget *mPeriodControls;            ///< USGS period, sampling interval and parameter.
+    QDateEdit *mStartDate;      ///< Inclusive first calendar date of the observation request.
+    QDateEdit *mEndDate;        ///< Inclusive last calendar date of the observation request.
+    QComboBox *mInterval;       ///< Continuous measurements or daily observations.
+    QComboBox *mParameter;      ///< USGS five-digit parameter code with familiar names.
+    QTableView *mTable;         ///< Catalogue selection/sorting view.
+    QStandardItemModel *mModel; ///< Complete currently reviewed catalogue records.
+    CatalogueFilter *mFilter;   ///< Local saved-property predicate over stable source rows.
+    QComboBox *mFilterField;    ///< All values or one exact saved property name.
+    QComboBox *mFilterOperator; ///< Literal, numeric or presence comparison.
+    QLineEdit *mFilterText;     ///< Plain comparison text; never a regular expression.
+    QLabel *mCounts;            ///< Visible/total/visible-selected catalogue counts.
+    QLabel *mAttributeTitle;    ///< Current location identity, or selection guidance.
+    QTableView *mAttributes;    ///< Read-only complete saved-property inspection.
+    QStandardItemModel *mAttributeModel; ///< Plain values, including nested JSON and explicit null.
+    QPointer<QNetworkReply> mReply;      ///< Active policy-controlled reply.
+    Sdk::IJob *mJob = nullptr;           ///< Borrowed host-retained current parsing job.
+    QList<Item> mItems;                  ///< Owning complete exact-area records.
+    QJsonObject mArea;                   ///< Frozen reviewed geometry used for parsing/provenance.
+    QJsonObject mProvenance;             ///< Actual response origin, separate from intended query.
+    QUrl mQuery;                         ///< Frozen intended metadata query.
+    quint64 mGeneration = 0;  ///< Plugin work generation; increments on cancellation/invalidation.
+    bool mValid = false;      ///< Complete results match the retained review authority.
+    bool mHasDisplay = false; ///< An adopted catalogue may outlive current export authority.
+    bool mFiltering = false; ///< Suppress intermediate selection publications during proxy changes.
+    bool mBusy = false;      ///< Preview request/parsing or a payload transfer is pending.
     bool mClosing = false;   ///< Widget destruction suppresses callbacks and publications.
 };
 }

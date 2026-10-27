@@ -9,6 +9,7 @@
  * @license GPL-3.0-or-later
  */
 #include "PreviewPanel.hpp"
+#include "CommandIcons.hpp"
 #include <sdk/IGuiExtension.hpp>
 #include <QFormLayout>
 #include <QLabel>
@@ -49,15 +50,19 @@ public:
         if (!lifetime || !qobject_cast<IEventSourceV2 *>(lifetime) ||
             !qobject_cast<IEventSourceV3 *>(lifetime) ||
             !qobject_cast<IEventSourceV4 *>(lifetime) ||
-            !qobject_cast<IViewControlsV1 *>(lifetime)) {
+            !qobject_cast<IViewControlsV1 *>(lifetime) ||
+            !qobject_cast<ITimeSeriesLayersV1 *>(lifetime) ||
+            !qobject_cast<IProgressV1 *>(lifetime)) {
             if (error)
                 *error = tr(
-                    "Data sources requires SDK 1.5 lifecycle, view, activity and selected-feature services.");
+                    "Data sources requires SDK 1.7 lifecycle, view, activity, selected-feature, time-series layer and progress services.");
             return false;
         }
         mHost = host;
-        auto *sites = new QAction(tr("USGS sites…"), host->lifetime());
-        auto *terrain = new QAction(tr("Elevation footprints…"), host->lifetime());
+        auto *sites = new QAction(tr("USGS time series…"), host->lifetime());
+        auto *terrain = new QAction(tr("Elevation raster…"), host->lifetime());
+        setCommandIcon(sites, CommandIcon::MonitoringSites);
+        setCommandIcon(terrain, CommandIcon::ElevationFootprints);
         connect(sites, &QAction::triggered, host->lifetime(), [this]() { show(Source::Sites); });
         connect(terrain, &QAction::triggered, host->lifetime(),
                 [this]() { show(Source::Terrain); });
@@ -66,19 +71,17 @@ public:
             !host->ui()->registerDockPanelFactory(this) ||
             !host->ui()->registerPreferencesPage(this) ||
             !host->ui()->registerRibbonTab(
-                {"data",
-                 tr("Data"),
-                 false,
-                 {{tr("Preview data sources"), {"sites", "terrain"}}}})) {
+                {"data", tr("Data"), false, {{tr("Download data"), {"sites", "terrain"}}}})) {
             if (error)
                 *error = tr("Could not register the Data interface.");
             return false;
         }
         host->console()->append(
-            "info", tr("Data sources loaded. Preview an area before saving selected features."));
+            "info",
+            tr("Data sources loaded. Preview an area, then select sites or tiles to download."));
         return true;
     }
-    /** @brief Abort pending metadata work before host-owned widgets are destroyed. */
+    /** @brief Abort pending previews and downloads before host-owned widgets are destroyed. */
     void shutdown() override
     {
         if (mPanel)

@@ -1,18 +1,30 @@
 # OpenSWMM Data Sources
 
 An independently built native plugin for `openswmm.gui`, consuming the installed
-GUI SDK 1.5, matching Qt, and GDAL. The SDK and plugin host remain in the GUI repo.
+GUI SDK 1.7, matching Qt with Qt SVG, and GDAL. The SDK and plugin host remain in the GUI repo.
 
 The source repository is [HydroCouple/hydrocouple.gui.data](https://github.com/HydroCouple/hydrocouple.gui.data).
 The plugin identity remains `openswmm.gui.data`; the hosted repository name does
 not change its GUI registration or installed package identity.
 
-This first consumer implements catalogue review: monitoring-site points and 3DEP
-product footprints, a current-viewport or loaded-polygon area, exact intersection
-filtering, selected-record map previews, a project-local metadata cache, and explicit
-GIS export with the reviewed area and source provenance. It does not download the
-advertised terrain tiles or import observation time series in this work package.
-The saved program adds those payload workflows after catalogue review.
+This plugin previews USGS monitoring locations and 3DEP elevation products in
+the current viewport or an exact loaded polygon. It provides temporary labeled
+gage features, catalogue search and optional attribute inspection, then downloads
+selected observations for an inclusive date range or selected elevation tiles.
+USGS output includes observation CSV, raw response pages and provenance; DEM
+output includes original GeoTIFFs and a mosaic cropped/masked to the reviewed
+area, including holes and multipart polygons. The derived DEM is added to
+the map. Successful nonempty USGS downloads are automatically added as native
+Time Series layers. Right-click a series to plot it or choose **Use in model…**
+for an explicit prepared model copy; downloading never changes model forcing.
+Published layers continue working when the Data plugin is disabled. Design storms
+remain separate work.
+
+**Clear preview** removes the temporary site layer or elevation footprints and
+catalogue rows, including a preview still being fetched. Saved downloads and
+imported layers remain available. Preview, download and import stages use the
+GUI's shared status bar and native **Logs** panel; completed files and successful
+layer additions are reported separately.
 
 ```sh
 cmake -S . -B build \
@@ -27,11 +39,29 @@ application kit. An existing GUI dependency prefix can be reused with
 `VCPKG_MANIFEST_MODE=OFF` and `VCPKG_INSTALLED_DIR` pointing at that prefix's parent.
 
 Add the built plugin directory in **Tools → Plugins…**, then restart the GUI.
-The **Data** ribbon opens the **Data sources** dock. See [the guide](docs/guide.md).
+The plugin adds its own **Data** ribbon tab. Its **USGS time series…** and
+**Elevation raster…** commands open the **Data sources** dock. The
+monitoring-gage and elevation/raster icons follow the GUI's light/dark palette and
+remain visible in command menus. See [the guide](docs/guide.md).
+After **Preview**, **USGS gages (preview)** provides the usual map-layer attribute
+table, query, selection and styling controls. Select a Data catalogue row to
+inspect every saved property, or use the Data attribute filter to narrow the
+records supplied to the map. Data row selection and native map-layer selection
+are independent: the advanced **Save selected sites/footprints as a map layer** action saves the selected,
+visible Data rows. Sorting or selecting Data rows preserves an unchanged native
+preview population; changing that population resets its native query and styling.
+The preview is omitted from project saves; an explicit feature export is persistent.
+Moving the viewport keeps a completed preview available for inspection, but a
+fresh preview is required before saving features from the new area. Attributes
+describe the recorded catalogue response. The download controls choose the actual
+observation period and measurement; an empty response does not imply zero flow.
+Use **Details and advanced options** for the full saved-property table and filters.
 All new C++ interfaces and source files use Doxygen comments. The plugin requires
-SDK 1.5 typed lifecycle, view and UI activity services. Review ownership uses the
+SDK 1.7 typed lifecycle, view, UI activity, native time-series import and shared
+progress services. Review ownership uses the
 per-open session and load generation, including when two models share a saved UUID.
-The guide documents which changes clear a review and how pending changes are fenced.
+The guide distinguishes retained display from export authority and documents how
+pending native changes are fenced.
 
 Development plans and verification data remain local under `workplans/` and
 `tests/verification/`; do not commit them.

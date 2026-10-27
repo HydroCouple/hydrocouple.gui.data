@@ -158,17 +158,21 @@ QList<Item> parseCatalogue(Source source, const QJsonObject &document, const QJs
     return result;
 }
 
+QJsonObject catalogueProperties(const Item &item)
+{
+    auto properties = item.metadata;
+    properties["catalogue_id"] = item.id;
+    properties["catalogue_title"] = item.title;
+    return properties;
+}
 QJsonObject featureCollection(const QList<Item> &items)
 {
     QJsonArray features;
     for (const auto &item : items) {
-        auto properties = item.metadata;
-        properties["catalogue_id"] = item.id;
-        properties["catalogue_title"] = item.title;
         features.append(QJsonObject{{"type", "Feature"},
                                     {"id", item.id},
                                     {"geometry", item.geometry},
-                                    {"properties", properties}});
+                                    {"properties", catalogueProperties(item)}});
     }
     return {{"type", "FeatureCollection"}, {"features", features}};
 }

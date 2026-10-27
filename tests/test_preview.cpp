@@ -1,26 +1,33 @@
 /**
  * @file test_preview.cpp
- * @brief Offline public-SDK acceptance of typed review invalidation and delayed publication.
+ * @brief Offline public-SDK acceptance of review authority, retained gages and attribute filtering.
  * @details A copied-state host holds notifications and worker completions independently.
  * Tests exercise the actual panel through ordinary controls and saved catalogues,
- * without native GUI headers, engine handles, remote services or temporary files.
+ * including labeled map populations, full property inspection, filtered export identity,
+ * and delayed native invalidation. No native GUI headers, engine handles, remote services
+ * or temporary files are needed.
  * @author Caleb Buahin <caleb.buahin@gmail.com>
  * @copyright Copyright (c) 2026 Caleb Buahin. All rights reserved.
  * @license GPL-3.0-or-later
  */
 #include "PreviewPanel.hpp"
+#include "ProgressRecorder.hpp"
+#include "PayloadDownload.hpp"
 #include <sdk/IEventSourceV2.hpp>
 #include <sdk/IEventSourceV3.hpp>
 #include <sdk/IEventSourceV4.hpp>
 #include <sdk/IViewControlsV1.hpp>
+#include <sdk/ITimeSeriesLayersV1.hpp>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDir>
+#include <QDateEdit>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QLabel>
+#include <QLineEdit>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -29,6 +36,7 @@
 #include <QTest>
 #include <QThread>
 #include <QTimer>
+#include <QToolButton>
 #include <algorithm>
 #include <cstring>
 #include <memory>
@@ -62,6 +70,42 @@ QByteArray catalogue()
                         {"properties", QJsonObject{{"monitoring_location_name", "Site one"}}},
                         {"geometry", QJsonObject{{"type", "Point"},
                                                  {"coordinates", QJsonArray{-76.5, 40.5}}}}}}}})
+        .toJson();
+}
+
+/** @brief Retain heterogeneous saved monitoring attributes, including numeric strings and JSON. */
+QByteArray richCatalogue()
+{
+    const auto site = [](const QString &id, const QString &title, QJsonObject properties, double x,
+                         double y) {
+        properties["monitoring_location_name"] = title;
+        return QJsonObject{
+            {"type", "Feature"},
+            {"id", id},
+            {"properties", properties},
+            {"geometry", QJsonObject{{"type", "Point"}, {"coordinates", QJsonArray{x, y}}}}};
+    };
+    return QJsonDocument(
+               QJsonObject{
+                   {"type", "FeatureCollection"},
+                   {"features",
+                    QJsonArray{site("site-one", "Alpha River",
+                                    {{"site_type", "ST"},
+                                     {"drainage_area", 12.5},
+                                     {"agency", "USGS"},
+                                     {"only_alpha", "recorded"},
+                                     {"nullable", QJsonValue(QJsonValue::Null)},
+                                     {"quality", QJsonObject{{"approved", true}}}},
+                                    -76.5, 40.5),
+                               site("site-two", "Beta Creek",
+                                    {{"site_type", "GW"},
+                                     {"drainage_area", "25"},
+                                     {"agency", "USGS"},
+                                     {"measurements", QJsonArray{"flow", "stage"}}},
+                                    -76.4, 40.6),
+                               site("site-three", "Gamma Lake",
+                                    {{"site_type", "LK"}, {"drainage_area", 0.}, {"agency", "EPA"}},
+                                    -76.3, 40.7)}}})
         .toJson();
 }
 
@@ -120,6 +164,7 @@ private:
 class Network final : public QNetworkAccessManager, public INetworkPolicy
 {
 public:
+    int requestCount = 0; ///< Actual network requests observed by the controlled policy client.
     QPointer<Reply>
         reply; ///< Latest synthetic reply, guarded through cancellation/deferred deletion.
     bool allowed(const QUrl &) const override { return true; }
@@ -128,6 +173,7 @@ public:
 protected:
     QNetworkReply *createRequest(Operation, const QNetworkRequest &request, QIODevice *) override
     {
+        ++requestCount;
         reply = new Reply(request, catalogue(), this);
         return reply;
     }
@@ -149,8 +195,11 @@ public:
     bool boundaryPresent = true;        ///< Current source membership.
     QString boundaryTitle = "Boundary"; ///< Current source caption.
     QJsonObject overlay;                ///< Latest visible transient preview.
+    QStringList rasters; ///< Paths of independently added native rasters, never preview-owned.
     QStringList exports;                ///< Paths added as ordinary persistent feature layers.
     int overlayWrites = 0;              ///< Count only successful nonempty preview publications.
+    std::function<void()>
+        previewChanged; ///< Optional native-layer mutation after changed preview content.
     QUuid id() const override;
     QString path() const override { return folder + "/model.oswp"; }
     QString directory() const override { return folder; }
@@ -177,7 +226,11 @@ public:
                                                      {"visible", true}}}
                                : QList<QVariantMap>{};
     }
-    QString addRasterLayer(const QString &, const QString &, QString *) override { return {}; }
+    QString addRasterLayer(const QString &path, const QString &, QString *) override
+    {
+        rasters.append(path);
+        return "raster-" + QString::number(rasters.size());
+    }
     QString addFeatureLayer(const QString &file, const QString &, QString *) override
     {
         exports.append(file);
@@ -212,8 +265,11 @@ public:
     }
     bool showPreview(const QJsonObject &value, QString *) override
     {
+        const bool changed = overlay != value;
         overlay = value;
         ++overlayWrites;
+        if (changed && previewChanged)
+            previewChanged();
         return true;
     }
     void clearPreview() override { overlay = {}; }
@@ -290,14 +346,19 @@ class Host final : public QObject,
                    public IEventSourceV3,
                    public IEventSourceV4,
                    public IViewControlsV1,
+                   public ITimeSeriesLayersV1,
+                   public ProgressRecorder,
                    public ISettings,
                    public IConsole,
                    public IUiHost
 {
     Q_OBJECT
-    Q_INTERFACES(OpenSWMM::Sdk::IEventSourceV2 OpenSWMM::Sdk::IEventSourceV3
-                     OpenSWMM::Sdk::IEventSourceV4 OpenSWMM::Sdk::IViewControlsV1)
+    Q_INTERFACES(
+        OpenSWMM::Sdk::IEventSourceV2 OpenSWMM::Sdk::IEventSourceV3 OpenSWMM::Sdk::IEventSourceV4
+            OpenSWMM::Sdk::IViewControlsV1 OpenSWMM::Sdk::ITimeSeriesLayersV1 OpenSWMM::Sdk::IProgressV1)
 public:
+    /** @brief Bind the fake scoped progress capability to this host lifetime. */
+    Host() : ProgressRecorder(this) {}
     /** @brief One copied source session and its independently owned model facade. */
     struct Entry {
         std::unique_ptr<Model> model;           ///< Native facade substitute.
@@ -320,6 +381,26 @@ public:
     std::function<void()>
         jobCreated;       ///< Optional synchronous lifetime mutation before runJob returns.
     QStringList messages; ///< Plain diagnostics for inspection.
+
+    QList<TimeSeriesImportRequest> imports; ///< Complete descriptor publication attempts.
+    std::function<void(const TimeSeriesImportResult &)> importFinished; ///< Held native completion.
+    /** @brief Retain a cancellable fake native import for lifecycle assertions. */
+    IJob *importTimeSeries(const TimeSeriesImportRequest &request, QObject *context,
+                           std::function<void(const TimeSeriesImportResult &)> finished,
+                           QString *error) override
+    {
+        if (error)
+            error->clear();
+        imports.append(request);
+        const QPointer<QObject> guard(context);
+        importFinished = [guard, finished](const TimeSeriesImportResult &result) {
+            if (guard)
+                finished(result);
+        };
+        return runJob("Import observations", [](IJobContext &) {}, {});
+    }
+    /** @brief Native collection listing is unused by the download panel. */
+    QList<TimeSeriesLayerInfo> timeSeriesLayers(const QUuid &) const override { return {}; }
 
     /** @brief Add an independent Ready model with a chosen persistent identity. */
     Entry *addModel(const QString &directory, const QUuid &persistent = QUuid::createUuid())
@@ -651,6 +732,13 @@ struct Fixture {
     }
     /** @brief Choose polygon mode through the ordinary area selector. */
     void polygonMode() { control<QComboBox>("dataAreaMode")->setCurrentIndex(1); }
+    /** @brief Replace the recorded response without creating a network request. */
+    bool record(const QByteArray &bytes)
+    {
+        QFile file(recorded);
+        return file.open(QIODevice::WriteOnly | QIODevice::Truncate) &&
+               file.write(bytes) == bytes.size();
+    }
     /** @brief Begin a saved response and optionally deliver its completed worker callback. */
     bool review(bool finish = true)
     {
@@ -672,6 +760,35 @@ struct Fixture {
     bool hasOverlay() const { return !entry->model->projectValue.overlay.isEmpty(); }
     /** @brief Trigger the real explicit export command through its existing button. */
     void exportSelection() { control<QPushButton>("dataExport")->click(); }
+    /** @brief Set one ordinary local attribute predicate using stable source property names. */
+    bool filter(const QString &field, const QString &operation, const QString &text = {})
+    {
+        auto *fields = control<QComboBox>("dataFilterField");
+        const int fieldIndex = field.isEmpty() ? 0 : fields->findData(field);
+        auto *operators = control<QComboBox>("dataFilterOperator");
+        const int operatorIndex = operators->findText(operation);
+        if (fieldIndex < 0 || operatorIndex < 0)
+            return false;
+        fields->setCurrentIndex(fieldIndex);
+        operators->setCurrentIndex(operatorIndex);
+        control<QLineEdit>("dataFilterText")->setText(text);
+        QCoreApplication::processEvents();
+        return true;
+    }
+    /** @brief Read the saved-property value displayed for the table's current location. */
+    QVariant attribute(const QString &name) const
+    {
+        const auto *attributes = control<QTableView>("dataAttributes")->model();
+        for (int row = 0; row < attributes->rowCount(); ++row)
+            if (attributes->index(row, 0).data().toString() == name)
+                return attributes->index(row, 1).data();
+        return {};
+    }
+    /** @brief Count actual geometry features in the current disposable map preview. */
+    int overlayCount() const
+    {
+        return entry->model->projectValue.overlay["features"].toArray().size();
+    }
 };
 }
 
@@ -682,6 +799,235 @@ class PreviewTest final : public QObject
 private slots:
     /** @brief Confirm every fixture file can be retained in the configured repository directory. */
     void initTestCase() { QVERIFY(QDir().mkpath(SDK_DATA_PREVIEW_VERIFICATION_DIRECTORY)); }
+    /** @brief The default flow hides unrelated area/product inputs and advanced inspection. */
+    void compactSourceSpecificWorkflow()
+    {
+        Fixture f;
+        QVERIFY(f.control<QWidget>("dataBoundaryControls")->isHidden());
+        QVERIFY(f.control<QWidget>("dataTerrainControls")->isHidden());
+        QVERIFY(!f.control<QWidget>("dataPeriodControls")->isHidden());
+        QVERIFY(f.control<QWidget>("dataDetails")->isHidden());
+        QVERIFY(f.control<QPushButton>("dataCancel")->isHidden());
+        f.control<QToolButton>("dataDetailsToggle")->click();
+        QVERIFY(!f.control<QWidget>("dataDetails")->isHidden());
+        f.polygonMode();
+        QVERIFY(!f.control<QWidget>("dataBoundaryControls")->isHidden());
+        f.panel->setSource(OpenSWMM::Data::Source::Terrain);
+        QVERIFY(!f.control<QWidget>("dataTerrainControls")->isHidden());
+        QVERIFY(f.control<QWidget>("dataPeriodControls")->isHidden());
+        QCOMPARE(f.control<QPushButton>("dataDownload")->text(), "Download selected raster tiles…");
+    }
+    /** @brief Clearing an accepted DEM/site preview retains independent layers and files. */
+    void clearPreviewRetainsSavedAssets_data()
+    {
+        QTest::addColumn<bool>("terrain");
+        QTest::newRow("sites") << false;
+        QTest::newRow("dem-footprints") << true;
+    }
+    /** @brief Only transient geometry and rows disappear; persistent raster/export paths survive. */
+    void clearPreviewRetainsSavedAssets()
+    {
+        QFETCH(bool, terrain);
+        Fixture f;
+        if (terrain) {
+            f.panel->setSource(OpenSWMM::Data::Source::Terrain);
+            const QByteArray terrainCatalogue = R"({"total":1,"items":[{"sourceId":"dem-a","title":"Elevation tile","boundingBox":{"minX":-78,"minY":39,"maxX":-76,"maxY":42},"downloadURL":"https://example.test/tile.tif"}]})";
+            QVERIFY(f.record(terrainCatalogue));
+        }
+        QVERIFY(f.review());
+        QVERIFY(f.hasOverlay());
+        f.entry->model->projectValue.rasters.append("existing-dem.tif");
+        f.entry->model->projectValue.exports.append("saved-sites.geojson");
+        const auto saved = f.directory + "/download-retained.csv";
+        QFile file(saved); QVERIFY(file.open(QIODevice::WriteOnly)); file.write("time,value\n"); file.close();
+        f.control<QPushButton>("dataClearPreview")->click();
+        QCOMPARE(f.rows(), 0);
+        QVERIFY(!f.hasOverlay());
+        QCOMPARE(f.entry->model->projectValue.rasters, QStringList{"existing-dem.tif"});
+        QCOMPARE(f.entry->model->projectValue.exports, QStringList{"saved-sites.geojson"});
+        QVERIFY(QFileInfo::exists(saved));
+        QCOMPARE(f.host.activeProgress(), 0);
+        QVERIFY(f.host.events.join('\n').contains("preview cleared"));
+        QVERIFY(!f.control<QPushButton>("dataDownload")->isEnabled());
+    }
+    /** @brief Pending network and latched parse completions cannot resurrect a cleared preview. */
+    void clearPendingPreviewFencesLateWork()
+    {
+        Fixture f;
+        f.control<QPushButton>("dataPreview")->click();
+        QVERIFY(f.host.policy.reply);
+        auto reply = f.host.policy.reply;
+        QCOMPARE(f.host.activeProgress(), 1);
+        QVERIFY(f.control<QPushButton>("dataClearPreview")->isEnabled());
+        f.control<QPushButton>("dataClearPreview")->click();
+        QCOMPARE(f.host.activeProgress(), 0);
+        QCOMPARE(reply->error(), QNetworkReply::OperationCanceledError);
+        reply->complete();
+        QCOMPARE(f.host.jobs.size(), size_t(0));
+        QVERIFY(!f.hasOverlay());
+        QVERIFY(f.review(false));
+        auto *job = f.host.jobs.back().get();
+        f.control<QPushButton>("dataClearPreview")->click();
+        job->complete();
+        QCOMPARE(f.rows(), 0);
+        QVERIFY(!f.hasOverlay());
+        QCOMPARE(f.host.activeProgress(), 0);
+        for (const auto &task : f.host.tasks)
+            QCOMPARE(task.outcome, task.title.startsWith("Clear ") ? ProgressOutcome::Succeeded
+                                                                   : ProgressOutcome::Cancelled);
+        QVERIFY(f.review());
+        QVERIFY(f.hasOverlay());
+        QCOMPARE(f.host.activeProgress(), 0);
+    }
+    /** @brief Stable metadata stages reach shared progress/logs and conclude after preview/export. */
+    void sharedPreviewProgressAndExport()
+    {
+        Fixture f;
+        f.control<QPushButton>("dataPreview")->click();
+        auto reply = f.host.policy.reply;
+        QVERIFY(reply);
+        emit reply->downloadProgress(10, 100);
+        emit reply->downloadProgress(20, 100);
+        emit reply->downloadProgress(30, 100);
+        QCOMPARE(f.host.events.filter("Receiving catalogue metadata").size(), 1);
+        reply->complete();
+        f.host.jobs.back()->complete();
+        QCOMPARE(f.host.activeProgress(), 0);
+        QVERIFY(f.host.events.join('\n').contains("Saving catalogue cache"));
+        f.select(); f.exportSelection();
+        QCOMPARE(f.host.activeProgress(), 0);
+        QVERIFY(f.host.events.join('\n').contains("Save selected catalogue features"));
+        for (const auto &task : f.host.tasks) QCOMPARE(task.outcome, ProgressOutcome::Succeeded);
+    }
+    /** @brief Synchronous shared-log publication may destroy the panel at start or during byte updates. */
+    void progressPublicationMayClosePanel()
+    {
+        Fixture starting;
+        starting.host.publishing = [&] {
+            starting.host.publishing = {};
+            starting.panel.reset();
+        };
+        starting.control<QPushButton>("dataPreview")->click();
+        QVERIFY(!starting.panel);
+        QCOMPARE(starting.host.activeProgress(), 0);
+        QCOMPARE(starting.host.policy.requestCount, 0);
+
+        Fixture receiving;
+        receiving.control<QPushButton>("dataPreview")->click();
+        auto reply = receiving.host.policy.reply;
+        QVERIFY(reply);
+        receiving.host.publishing = [&] {
+            receiving.host.publishing = {};
+            receiving.panel.reset();
+        };
+        emit reply->downloadProgress(1, 10);
+        QVERIFY(!receiving.panel);
+        QCOMPARE(receiving.host.activeProgress(), 0);
+    }
+    /** @brief Cancellation before beginProgress returns closes that returned token and never starts IO. */
+    void cancellationDuringProgressBegin()
+    {
+        Fixture f;
+        f.host.publishing = [&] {
+            f.host.publishing = {};
+            f.panel->cancel();
+        };
+        f.control<QPushButton>("dataPreview")->click();
+        QVERIFY(f.panel);
+        QCOMPARE(f.host.activeProgress(), 0);
+        QCOMPARE(f.host.policy.requestCount, 0);
+        QCOMPARE(f.host.tasks.size(), 1);
+        QCOMPARE(f.host.tasks.cbegin()->outcome, ProgressOutcome::Cancelled);
+        QVERIFY(f.control<QPushButton>("dataPreview")->isEnabled());
+        QVERIFY(f.review());
+        QVERIFY(f.hasOverlay());
+        QCOMPARE(f.host.activeProgress(), 0);
+    }
+    /** @brief Completed files hand off once to the exact Ready session and stay cancellable. */
+    void downloadedObservationsBecomeNativeLayers()
+    {
+        Fixture f;
+        QVERIFY(f.review());
+        f.select();
+        OpenSWMM::Data::PayloadResult result;
+        result.importId = QUuid::createUuid();
+        result.observationCount = 3;
+        result.manifestPath = f.directory + "/manifest.json";
+        result.descriptorPath = f.directory + "/timeseries-import.json";
+        auto *payload = f.panel->findChild<OpenSWMM::Data::PayloadDownload *>();
+        QVERIFY(payload);
+        payload->finished(result);
+        QCOMPARE(f.host.imports.size(), 1);
+        QCOMPARE(f.host.imports.first().sessionId, f.entry->state.sessionId);
+        QCOMPARE(f.host.imports.first().loadGeneration, f.entry->state.loadGeneration);
+        QCOMPARE(f.host.imports.first().importId, result.importId);
+        QCOMPARE(f.host.imports.first().descriptorPath, result.descriptorPath);
+        QVERIFY(f.control<QPushButton>("dataCancel")->isEnabled());
+        QVERIFY(!f.control<QPushButton>("dataClearPreview")->isEnabled());
+        QCOMPARE(f.host.activeProgress(), 1);
+        QVERIFY(!f.control<QPushButton>("dataDownload")->isEnabled());
+        TimeSeriesImportResult imported;
+        imported.importId = result.importId;
+        imported.layerId = "native-observations";
+        imported.seriesCount = 2;
+        f.host.importFinished(imported);
+        QVERIFY(f.control<QPushButton>("dataCancel")->isHidden());
+        QVERIFY(f.control<QLabel>("dataStatus")->text().contains("Added 2 series"));
+    }
+    /** @brief A cancelled or invalidated native import cannot report a late success. */
+    void nativeImportCancellationAndStaleCompletion()
+    {
+        Fixture f;
+        QVERIFY(f.review());
+        f.select();
+        OpenSWMM::Data::PayloadResult result;
+        result.importId = QUuid::createUuid();
+        result.observationCount = 1;
+        result.manifestPath = f.directory + "/manifest.json";
+        result.descriptorPath = f.directory + "/timeseries-import.json";
+        f.panel->findChild<OpenSWMM::Data::PayloadDownload *>()->finished(result);
+        QCOMPARE(f.host.imports.size(), 1);
+        auto *job = f.host.jobs.back().get();
+        f.panel->cancel();
+        QVERIFY(job->cancelled);
+        QVERIFY(f.control<QLabel>("dataStatus")->text().contains("Layer import cancelled"));
+        const auto before = f.control<QLabel>("dataStatus")->text();
+        TimeSeriesImportResult imported;
+        imported.layerId = "late";
+        imported.seriesCount = 99;
+        f.host.importFinished(imported);
+        QCOMPARE(f.control<QLabel>("dataStatus")->text(), before);
+        f.entry->model->open = false;
+        f.panel->findChild<OpenSWMM::Data::PayloadDownload *>()->finished(result);
+        QCOMPARE(f.host.imports.size(), 1);
+        QVERIFY(f.control<QLabel>("dataStatus")->text().contains("saved, not added"));
+    }
+    /** @brief A reversed period or invalid measurement cannot start an observation transfer. */
+    void observationPeriodAndParameterGateDownload()
+    {
+        Fixture f;
+        QVERIFY(f.review());
+        f.select();
+        auto *button = f.control<QPushButton>("dataDownload");
+        QVERIFY(button->isEnabled());
+        auto *from = f.control<QDateEdit>("dataStartDate");
+        auto *to = f.control<QDateEdit>("dataEndDate");
+        from->setDate(to->date().addDays(1));
+        QVERIFY(!button->isEnabled());
+        const auto networkCount = f.host.policy.requestCount;
+        f.panel->downloadTo(QString::fromLatin1(SDK_DATA_PREVIEW_VERIFICATION_DIRECTORY));
+        QCOMPARE(f.host.policy.requestCount, networkCount);
+        from->setDate(to->date());
+        QVERIFY(button->isEnabled());
+        auto *parameter = f.control<QComboBox>("dataParameter");
+        parameter->setEditText("invalid");
+        QVERIFY(!button->isEnabled());
+        parameter->setEditText("00065");
+        QVERIFY(button->isEnabled());
+        f.entry->model->open = false;
+        f.panel->downloadTo(QString::fromLatin1(SDK_DATA_PREVIEW_VERIFICATION_DIRECTORY));
+        QCOMPARE(f.host.policy.requestCount, networkCount);
+    }
     /** @brief A current review exports its exact area/source IDs and uses no legacy subscription. */
     void currentReviewCanExport()
     {
@@ -701,6 +1047,427 @@ private slots:
         QCOMPARE(value["review"].toObject()["area"].toObject(), polygon());
         QCOMPARE(value["features"].toArray().first().toObject()["id"].toString(), "site-one");
     }
+    /** @brief Selecting one gage highlights a record without hiding any other reviewed map points. */
+    void selectionRetainsAllGageDotsAndLabels()
+    {
+        Fixture f;
+        QVERIFY(f.record(richCatalogue()));
+        QVERIFY(f.review());
+        QCOMPARE(f.rows(), 3);
+        QCOMPARE(f.overlayCount(), 3);
+        QCOMPARE(f.entry->model->projectValue.overlay["previewStyle"]
+                     .toObject()["pointLabelProperty"]
+                     .toString(),
+                 "catalogue_title");
+        QVERIFY(f.entry->model->projectValue.overlay["previewStyle"]
+                    .toObject()["asFeatureLayer"]
+                    .toBool());
+        QCOMPARE(
+            f.entry->model->projectValue.overlay["previewStyle"].toObject()["title"].toString(),
+            "USGS gages (preview)");
+        const auto population = f.entry->model->projectValue.overlay;
+        auto *table = f.control<QTableView>("dataCatalogue");
+        table->sortByColumn(0, Qt::AscendingOrder);
+        table->selectRow(0);
+        QCOMPARE(f.entry->model->projectValue.overlay, population);
+        table->sortByColumn(0, Qt::DescendingOrder);
+        QCoreApplication::processEvents();
+        QCOMPARE(table->model()->index(1, 1).data().toString(), "site-two");
+        table->selectRow(1);
+        QCOMPARE(f.overlayCount(), 3);
+        QCOMPARE(f.entry->model->projectValue.overlay, population);
+        QVERIFY(f.control<QPushButton>("dataExport")->isEnabled());
+        f.exportSelection();
+        QCOMPARE(f.entry->model->projectValue.exports.size(), 1);
+        QFile file(f.entry->model->projectValue.exports.first());
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const auto saved = QJsonDocument::fromJson(file.readAll()).object();
+        QVERIFY(!saved.contains("previewStyle"));
+        const auto features = saved["features"].toArray();
+        QCOMPARE(features.size(), 1);
+        QCOMPARE(features.first().toObject()["id"].toString(), "site-two");
+        QCOMPARE(features.first().toObject()["properties"].toObject()["drainage_area"].toString(),
+                 "25");
+    }
+    /** @brief A real temporary-layer insertion retains results until detailed revision evidence arrives. */
+    void nativePreviewInsertionWaitsForDetailedEvidence()
+    {
+        Fixture f;
+        f.polygonMode();
+        QVERIFY(f.record(richCatalogue()));
+        const auto previewLayer = QUuid::createUuid();
+        f.entry->model->projectValue.previewChanged = [&] {
+            f.host.stateChange(f.entry, StateChange::Layers);
+            f.host.viewChange(f.entry, ViewEventKind::LayerAdded, previewLayer);
+        };
+        QVERIFY(f.review());
+        QCOMPARE(f.rows(), 3);
+        QCOMPARE(f.overlayCount(), 3);
+        f.select();
+        QVERIFY(!f.control<QPushButton>("dataExport")->isEnabled());
+        const auto writes = f.entry->model->projectValue.overlayWrites;
+        f.host.drainFirstState();
+        QCOMPARE(f.entry->model->projectValue.overlayWrites, writes);
+        QVERIFY(!f.control<QPushButton>("dataExport")->isEnabled());
+        f.exportSelection();
+        QVERIFY(f.entry->model->projectValue.exports.isEmpty());
+        f.host.drain();
+        QTRY_VERIFY(f.control<QPushButton>("dataExport")->isEnabled());
+        QCOMPARE(f.rows(), 3);
+        QCOMPARE(f.overlayCount(), 3);
+        f.exportSelection();
+        QCOMPARE(f.entry->model->projectValue.exports.size(), 1);
+    }
+    /** @brief A local population change waits for replacement evidence; sorting preserves native content. */
+    void nativePreviewFilteringWaitsWithoutResettingUnchangedPopulation()
+    {
+        Fixture f;
+        QVERIFY(f.record(richCatalogue()));
+        const auto previewLayer = QUuid::createUuid();
+        int changes = 0;
+        f.entry->model->projectValue.previewChanged = [&] {
+            ++changes;
+            f.host.viewChange(f.entry, ViewEventKind::LayerAdded, previewLayer);
+        };
+        QVERIFY(f.review());
+        QCOMPARE(changes, 1);
+        // Before insertion evidence arrives, only the desired population changes.
+        QVERIFY(f.filter("agency", "Equals", "USGS"));
+        QCOMPARE(f.rows(), 2);
+        QCOMPARE(f.overlayCount(), 3);
+        QCOMPARE(changes, 1);
+        f.select();
+        QVERIFY(!f.control<QPushButton>("dataExport")->isEnabled());
+        // The first safe rebase publishes the filtered replacement, whose own
+        // detailed revision must then be delivered before export is authorized.
+        QTRY_VERIFY((f.host.drain(), f.control<QPushButton>("dataExport")->isEnabled()));
+        QCOMPARE(f.overlayCount(), 2);
+        QCOMPARE(changes, 2);
+        const auto population = f.entry->model->projectValue.overlay;
+        auto *table = f.control<QTableView>("dataCatalogue");
+        table->sortByColumn(0, Qt::DescendingOrder);
+        table->selectRow(0);
+        QCOMPARE(f.entry->model->projectValue.overlay, population);
+        QCOMPARE(changes, 2);
+        QVERIFY(f.control<QPushButton>("dataExport")->isEnabled());
+    }
+    /** @brief A pending boundary mutation cannot hide behind an unrelated temporary-layer insertion. */
+    void nativePreviewDoesNotAdoptPendingBoundaryRevision()
+    {
+        Fixture f;
+        f.polygonMode();
+        QVERIFY(f.record(richCatalogue()));
+        f.entry->model->projectValue.previewChanged = [&] {
+            f.host.viewChange(f.entry, ViewEventKind::LayerAdded, QUuid::createUuid());
+        };
+        QVERIFY(f.review());
+        QCOMPARE(f.rows(), 3);
+        f.entry->model->projectValue.boundary = polygon(true);
+        f.host.viewChange(f.entry, ViewEventKind::LayerFeaturesChanged, f.attachment());
+        f.entry->model->projectValue.boundary = polygon();
+        f.host.viewChange(f.entry, ViewEventKind::LayerFeaturesChanged, f.attachment());
+        f.select();
+        QVERIFY(!f.control<QPushButton>("dataExport")->isEnabled());
+        f.host.drain();
+        QTRY_COMPARE(f.rows(), 0);
+        QVERIFY(!f.hasOverlay());
+        QVERIFY(!f.control<QPushButton>("dataExport")->isEnabled());
+        QVERIFY(f.entry->model->projectValue.exports.isEmpty());
+    }
+    /** @brief A native source mutation nested in preview insertion never gains export authority. */
+    void nativePreviewNestedSourceMutation_data()
+    {
+        QTest::addColumn<bool>("boundary");
+        QTest::newRow("changed viewport retained for inspection") << false;
+        QTest::newRow("changed chosen polygon cleared") << true;
+    }
+    void nativePreviewNestedSourceMutation()
+    {
+        QFETCH(bool, boundary);
+        Fixture f;
+        if (boundary)
+            f.polygonMode();
+        QVERIFY(f.record(richCatalogue()));
+        f.entry->model->projectValue.previewChanged = [&] {
+            f.host.viewChange(f.entry, ViewEventKind::LayerAdded, QUuid::createUuid());
+            if (boundary) {
+                f.entry->model->projectValue.boundary = polygon(true);
+                f.host.viewChange(f.entry, ViewEventKind::LayerFeaturesChanged, f.attachment());
+            } else {
+                f.entry->model->projectValue.viewport = polygon(true);
+                f.host.stateChange(f.entry, StateChange::Viewport);
+            }
+        };
+        QVERIFY(f.review());
+        QCOMPARE(f.rows(), boundary ? 0 : 3);
+        if (boundary)
+            QVERIFY(!f.hasOverlay());
+        else
+            QCOMPARE(f.overlayCount(), 3);
+        QVERIFY(!f.control<QPushButton>("dataExport")->isEnabled());
+        f.host.drain();
+        QCOMPARE(f.rows(), boundary ? 0 : 3);
+        QVERIFY(!f.control<QPushButton>("dataExport")->isEnabled());
+        QVERIFY(f.entry->model->projectValue.exports.isEmpty());
+    }
+    /** @brief The current location exposes every saved property without flattening nested JSON or null. */
+    void locationAttributesMatchSavedProperties()
+    {
+        Fixture f;
+        QVERIFY(f.record(richCatalogue()));
+        QVERIFY(f.review());
+        QVERIFY(f.filter("catalogue_id", "Equals", "site-one"));
+        f.select();
+        QCOMPARE(f.attribute("catalogue_id").toString(), "site-one");
+        QCOMPARE(f.attribute("catalogue_title").toString(), "Alpha River");
+        QCOMPARE(f.attribute("site_type").toString(), "ST");
+        QCOMPARE(f.attribute("drainage_area").toString().toDouble(), 12.5);
+        QCOMPARE(f.attribute("agency").toString(), "USGS");
+        QCOMPARE(f.attribute("only_alpha").toString(), "recorded");
+        QVERIFY(f.attribute("nullable").isValid());
+        QCOMPARE(f.attribute("nullable").toString(), "null");
+        QCOMPARE(QJsonDocument::fromJson(f.attribute("quality").toString().toUtf8()).object(),
+                 (QJsonObject{{"approved", true}}));
+        QVERIFY(f.control<QComboBox>("dataFilterField")->findData("quality") >= 0);
+        f.exportSelection();
+        QCOMPARE(f.entry->model->projectValue.exports.size(), 1);
+        QFile file(f.entry->model->projectValue.exports.first());
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const auto properties = QJsonDocument::fromJson(file.readAll())
+                                    .object()["features"]
+                                    .toArray()
+                                    .first()
+                                    .toObject()["properties"]
+                                    .toObject();
+        QVERIFY(properties["nullable"].isNull());
+        QCOMPARE(properties["quality"].toObject(), (QJsonObject{{"approved", true}}));
+        QVERIFY(f.filter("catalogue_id", "Equals", "site-two"));
+        f.select();
+        QCOMPARE(f.attribute("catalogue_id").toString(), "site-two");
+        QVERIFY(!f.attribute("only_alpha").isValid());
+        QCOMPARE(QJsonDocument::fromJson(f.attribute("measurements").toString().toUtf8()).array(),
+                 (QJsonArray{"flow", "stage"}));
+    }
+    /** @brief Local search is literal and case-insensitive, updates map visibility, and makes no request. */
+    void literalFilterKeepsTableAndMapTogether()
+    {
+        Fixture f;
+        QVERIFY(f.record(richCatalogue()));
+        QVERIFY(f.review());
+        const auto jobs = f.host.jobs.size();
+        QVERIFY(f.filter({}, "Contains", "alpha RIVER"));
+        QCOMPARE(f.rows(), 1);
+        QCOMPARE(f.overlayCount(), 1);
+        QCOMPARE(f.control<QTableView>("dataCatalogue")->model()->index(0, 1).data().toString(),
+                 "site-one");
+        QVERIFY(f.filter({}, "Contains", ".*"));
+        QCOMPARE(f.rows(), 0);
+        QCOMPARE(f.overlayCount(), 0);
+        QVERIFY(!f.control<QPushButton>("dataExport")->isEnabled());
+        QCOMPARE(f.control<QTableView>("dataAttributes")->model()->rowCount(), 0);
+        f.control<QPushButton>("dataClearFilter")->click();
+        QCOMPARE(f.rows(), 3);
+        QCOMPARE(f.overlayCount(), 3);
+        QCOMPARE(f.host.jobs.size(), jobs);
+    }
+    /** @brief Numeric, exact-value and presence predicates work across heterogeneous source attributes. */
+    void attributePredicatesUseSavedValues()
+    {
+        Fixture f;
+        QVERIFY(f.record(richCatalogue()));
+        QVERIFY(f.review());
+        QVERIFY(f.filter("site_type", "Equals", "st"));
+        QCOMPARE(f.rows(), 1);
+        QCOMPARE(f.overlayCount(), 1);
+        QVERIFY(f.filter("drainage_area", "At least", "20"));
+        QCOMPARE(f.rows(), 1);
+        QCOMPARE(f.control<QTableView>("dataCatalogue")->model()->index(0, 1).data().toString(),
+                 "site-two");
+        QVERIFY(f.filter("drainage_area", "At most", "12.5"));
+        QCOMPARE(f.rows(), 2);
+        QCOMPARE(f.overlayCount(), 2);
+        QVERIFY(f.filter("drainage_area", "At least", "not a number"));
+        QCOMPARE(f.rows(), 0);
+        QVERIFY(f.filter("only_alpha", "Has value"));
+        QCOMPARE(f.rows(), 1);
+        QVERIFY(f.filter("only_alpha", "Is missing"));
+        QCOMPARE(f.rows(), 2);
+        QVERIFY(f.filter("nullable", "Is missing"));
+        QCOMPARE(f.rows(), 3);
+        QVERIFY(f.filter("nullable", "Has value"));
+        QCOMPARE(f.rows(), 0);
+    }
+    /** @brief Filtered-out selected locations cannot become hidden export candidates after sorting. */
+    void filteringCannotExportHiddenSelection()
+    {
+        Fixture f;
+        QVERIFY(f.record(richCatalogue()));
+        QVERIFY(f.review());
+        QVERIFY(f.filter("catalogue_id", "Equals", "site-two"));
+        f.select();
+        QVERIFY(f.control<QPushButton>("dataExport")->isEnabled());
+        QVERIFY(f.filter("catalogue_id", "Equals", "site-one"));
+        QCOMPARE(f.rows(), 1);
+        QVERIFY(!f.control<QPushButton>("dataExport")->isEnabled());
+        f.exportSelection();
+        QVERIFY(f.entry->model->projectValue.exports.isEmpty());
+        f.select();
+        f.exportSelection();
+        QCOMPARE(f.entry->model->projectValue.exports.size(), 1);
+        QFile file(f.entry->model->projectValue.exports.first());
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const auto features =
+            QJsonDocument::fromJson(file.readAll()).object()["features"].toArray();
+        QCOMPARE(features.size(), 1);
+        QCOMPARE(features.first().toObject()["id"].toString(), "site-one");
+    }
+    /** @brief Panning retains inspectable/filterable gages but never permits export under stale authority. */
+    void retainedViewportPreviewIsInspectionOnlyUntilReviewed()
+    {
+        Fixture f;
+        QVERIFY(f.record(richCatalogue()));
+        QVERIFY(f.review());
+        f.entry->model->projectValue.viewport = polygon(true);
+        f.host.stateChange(f.entry, StateChange::Viewport);
+        f.host.drain();
+        QCOMPARE(f.rows(), 3);
+        QCOMPARE(f.overlayCount(), 3);
+        QVERIFY(f.filter("agency", "Equals", "USGS"));
+        QCOMPARE(f.rows(), 2);
+        QCOMPARE(f.overlayCount(), 2);
+        f.select();
+        QVERIFY(f.attribute("catalogue_id").isValid());
+        QVERIFY(!f.control<QPushButton>("dataExport")->isEnabled());
+        f.exportSelection();
+        QVERIFY(f.entry->model->projectValue.exports.isEmpty());
+        f.entry->model->open = false;
+        f.entry->state.status = SessionStatus::Closing;
+        f.host.stateChange(f.entry, {}, StateEventKind::SessionClosing);
+        f.host.drain();
+        QCOMPARE(f.rows(), 0);
+        QVERIFY(!f.hasOverlay());
+        QCOMPARE(f.control<QTableView>("dataAttributes")->model()->rowCount(), 0);
+    }
+    /** @brief A pending viewport revision revokes export immediately while retaining the adopted display. */
+    void pendingViewportExportKeepsInspectionDisplay()
+    {
+        Fixture f;
+        QVERIFY(f.record(richCatalogue()));
+        QVERIFY(f.review());
+        f.select();
+        QVERIFY(f.control<QPushButton>("dataExport")->isEnabled());
+        f.entry->model->projectValue.viewport = polygon(true);
+        f.host.stateChange(f.entry, StateChange::Viewport);
+        // Deliberately withhold queued state delivery: export queries native
+        // authority synchronously before the viewport observation reaches the UI.
+        f.exportSelection();
+        QVERIFY(f.entry->model->projectValue.exports.isEmpty());
+        QVERIFY(!f.control<QPushButton>("dataExport")->isEnabled());
+        QCOMPARE(f.rows(), 3);
+        QCOMPARE(f.overlayCount(), 3);
+        f.host.drain();
+        QCOMPARE(f.rows(), 3);
+        QCOMPARE(f.overlayCount(), 3);
+        QVERIFY(f.filter("site_type", "Equals", "GW"));
+        QCOMPARE(f.rows(), 1);
+        QCOMPARE(f.overlayCount(), 1);
+        f.select();
+        QCOMPARE(f.attribute("catalogue_id").toString(), "site-two");
+        QVERIFY(!f.control<QPushButton>("dataExport")->isEnabled());
+    }
+    /** @brief A retained viewport display cannot redraw onto an already committed new native load. */
+    void queuedReloadClearsRetainedDisplayBeforeFilterPublication_data()
+    {
+        QTest::addColumn<bool>("closing");
+        QTest::newRow("reload") << false;
+        QTest::newRow("closing") << true;
+    }
+    /** @brief Queued reload and close changes cannot publish old display geometry. */
+    void queuedReloadClearsRetainedDisplayBeforeFilterPublication()
+    {
+        QFETCH(bool, closing);
+        Fixture f;
+        QVERIFY(f.record(richCatalogue()));
+        QVERIFY(f.review());
+        f.entry->model->projectValue.viewport = polygon(true);
+        f.host.stateChange(f.entry, StateChange::Viewport);
+        f.host.drain();
+        QCOMPARE(f.rows(), 3);
+        QCOMPARE(f.overlayCount(), 3);
+        const auto writes = f.entry->model->projectValue.overlayWrites;
+        if (closing) {
+            f.entry->model->open = false;
+            f.entry->state.status = SessionStatus::Closing;
+            f.host.stateChange(f.entry, {}, StateEventKind::SessionClosing);
+        } else {
+            ++f.entry->state.loadGeneration;
+            f.entry->state.status = SessionStatus::Loading;
+            f.host.stateChange(f.entry, {}, StateEventKind::LoadStarted);
+        }
+        // Keep the lifecycle notification queued while an ordinary local filter
+        // tries to refresh the stale display against current native readiness.
+        QVERIFY(f.filter("agency", "Equals", "USGS"));
+        QCOMPARE(f.rows(), 0);
+        QVERIFY(!f.hasOverlay());
+        QCOMPARE(f.entry->model->projectValue.overlayWrites, writes);
+        QVERIFY(!f.control<QPushButton>("dataExport")->isEnabled());
+        f.exportSelection();
+        QVERIFY(f.entry->model->projectValue.exports.isEmpty());
+        f.host.drain();
+        QCOMPARE(f.rows(), 0);
+        QVERIFY(!f.hasOverlay());
+    }
+    /** @brief A nested current-location change cannot mix the previous location's remaining properties. */
+    void nestedCurrentLocationKeepsOneCompleteAttributeRecord()
+    {
+        Fixture f;
+        QVERIFY(f.record(richCatalogue()));
+        QVERIFY(f.review());
+        auto *table = f.control<QTableView>("dataCatalogue");
+        table->sortByColumn(0, Qt::AscendingOrder);
+        QCoreApplication::processEvents();
+        QCOMPARE(table->model()->index(0, 1).data().toString(), "site-one");
+        QCOMPARE(table->model()->index(1, 1).data().toString(), "site-two");
+        auto *attributes = f.control<QTableView>("dataAttributes")->model();
+        table->setCurrentIndex(QModelIndex{});
+        bool moved = false;
+        connect(attributes, &QAbstractItemModel::rowsInserted, f.panel.get(), [&] {
+            if (moved)
+                return;
+            moved = true;
+            table->setCurrentIndex(table->model()->index(1, 0));
+            table->selectRow(1);
+        });
+        table->setCurrentIndex(table->model()->index(0, 0));
+        QVERIFY(moved);
+        QCOMPARE(f.attribute("catalogue_id").toString(), "site-two");
+        QCOMPARE(f.attribute("catalogue_title").toString(), "Beta Creek");
+        QVERIFY(!f.attribute("only_alpha").isValid());
+        QVERIFY(!f.attribute("nullable").isValid());
+        QVERIFY(!f.attribute("quality").isValid());
+        const auto properties = QJsonDocument::fromJson(richCatalogue())
+                                    .object()["features"]
+                                    .toArray()
+                                    .at(1)
+                                    .toObject()["properties"]
+                                    .toObject();
+        QCOMPARE(attributes->rowCount(), properties.size() + 2);
+        QCOMPARE(QJsonDocument::fromJson(f.attribute("measurements").toString().toUtf8()).array(),
+                 (QJsonArray{"flow", "stage"}));
+    }
+    /** @brief Explicit source changes retire the displayed gage set and its location inspector. */
+    void sourceChangeClearsRetainedLocationAttributes()
+    {
+        Fixture f;
+        QVERIFY(f.record(richCatalogue()));
+        QVERIFY(f.review());
+        f.select();
+        QVERIFY(f.attribute("catalogue_id").isValid());
+        f.control<QComboBox>("dataSource")->setCurrentIndex(1);
+        QCOMPARE(f.rows(), 0);
+        QVERIFY(!f.hasOverlay());
+        QCOMPARE(f.control<QTableView>("dataAttributes")->model()->rowCount(), 0);
+    }
     /** @brief Loading/failed sessions cannot start a review; a Ready event enables the same facade. */
     void readinessIsAuthoritative()
     {
@@ -714,7 +1481,7 @@ private slots:
         QVERIFY(f.review());
         QCOMPARE(f.rows(), 1);
     }
-    /** @brief Viewport mutations invalidate viewport review while polygon mode keeps its explicit area. */
+    /** @brief Viewport changes retain display but revoke export; polygon mode keeps its explicit area. */
     void viewportScopeMatchesAreaMode()
     {
         Fixture f;
@@ -722,8 +1489,12 @@ private slots:
         f.entry->model->projectValue.viewport = polygon(true);
         f.host.stateChange(f.entry, StateChange::Viewport);
         f.host.drain();
-        QCOMPARE(f.rows(), 0);
-        QVERIFY(!f.hasOverlay());
+        QCOMPARE(f.rows(), 1);
+        QVERIFY(f.hasOverlay());
+        f.select();
+        QVERIFY(!f.control<QPushButton>("dataExport")->isEnabled());
+        f.exportSelection();
+        QVERIFY(f.entry->model->projectValue.exports.isEmpty());
         f.polygonMode();
         QVERIFY(f.review());
         const auto overlayWrites = f.entry->model->projectValue.overlayWrites;
@@ -1020,8 +1791,8 @@ private slots:
         f.entry->model->projectValue.projectCrs = "EPSG:4326";
         f.host.stateChange(f.entry, StateChange::Viewport);
         f.host.drain();
-        QCOMPARE(f.rows(), 0);
-        QVERIFY(!f.hasOverlay());
+        QCOMPARE(f.rows(), 1);
+        QVERIFY(f.hasOverlay());
         QVERIFY(!f.control<QPushButton>("dataExport")->isEnabled());
     }
     /** @brief A broad V2 publication cannot rebase over its still-pending same-revision V3 source change. */

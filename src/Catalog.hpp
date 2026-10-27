@@ -18,7 +18,7 @@
 
 namespace OpenSWMM::Data
 {
-/** @brief Available catalogue adapters; payload processing is a subsequent work package. */
+/** @brief Available catalogue adapters for preview and explicit payload retrieval. */
 enum class Source { Sites, Terrain };
 /** @brief Owning metadata for one selectable site or source product. */
 struct Item {
@@ -26,8 +26,12 @@ struct Item {
     QString title;        ///< User-facing station/product name.
     QJsonObject geometry; ///< WGS84 site point or catalogue coverage polygon.
     QJsonObject metadata; ///< Original properties, including provenance and source attributes.
-    QUrl download;        ///< Advertised product URL; catalogue preview does not fetch it.
+    QUrl download;        ///< Advertised product URL, used only by an explicit payload download.
 };
+/** @brief Copy exactly the properties written by featureCollection().
+ * @param[in] item Original source record.
+ * @return Source properties plus stable catalogue_id and catalogue_title. */
+QJsonObject catalogueProperties(const Item &item);
 /** @brief Read an exact, valid polygon's query envelope.
  * @param[in] area WGS84 Polygon/MultiPolygon geometry preserving holes and parts.
  * @param[out] error Optional geometry/range failure detail.

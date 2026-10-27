@@ -5,13 +5,18 @@ project(OpenSWMMData VERSION 0.1.0 LANGUAGES CXX)
 if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build configuration" FORCE)
 endif()
-find_package(OpenSWMMVisSdk 1.5 CONFIG REQUIRED)
+find_package(OpenSWMMVisSdk 1.7 CONFIG REQUIRED)
 find_package(GDAL REQUIRED)
+find_package(Qt6 REQUIRED COMPONENTS Svg)
 openswmmvis_add_extension(openswmm_data
     ID openswmm.gui.data CAPTION "Data sources" VERSION 0.1.0
     VENDOR "OpenSWMM" LICENSE "GPL-3.0-or-later"
-    SOURCES src/Extension.cpp src/PreviewPanel.cpp src/PreviewPanel.hpp src/Catalog.cpp src/Catalog.hpp)
-target_link_libraries(openswmm_data PRIVATE GDAL::GDAL)
+    SOURCES src/Extension.cpp src/PreviewPanel.cpp src/PreviewPanel.hpp src/Catalog.cpp src/Catalog.hpp
+            src/PayloadDownload.cpp src/PayloadDownload.hpp src/OperationProgress.hpp
+            src/CatalogueFilter.cpp src/CatalogueFilter.hpp src/CommandIcons.cpp src/CommandIcons.hpp
+            resources/openswmm_data_icons.qrc)
+set_target_properties(openswmm_data PROPERTIES AUTORCC ON)
+target_link_libraries(openswmm_data PRIVATE GDAL::GDAL Qt6::Svg)
 option(OPENSWMM_DATA_BUILD_TESTS "Build offline catalogue/geometry checks" ON)
 if(OPENSWMM_DATA_BUILD_TESTS)
     find_package(Qt6 REQUIRED COMPONENTS Test)
@@ -22,7 +27,8 @@ if(OPENSWMM_DATA_BUILD_TESTS)
     target_include_directories(test_catalog PRIVATE src)
     target_link_libraries(test_catalog PRIVATE Qt6::Test GDAL::GDAL)
     add_test(NAME data_catalog COMMAND test_catalog)
-    add_executable(test_preview tests/test_preview.cpp src/PreviewPanel.cpp src/PreviewPanel.hpp src/Catalog.cpp)
+    add_executable(test_preview tests/test_preview.cpp src/PreviewPanel.cpp src/PreviewPanel.hpp src/Catalog.cpp
+                                src/CatalogueFilter.cpp src/PayloadDownload.cpp src/PayloadDownload.hpp)
     set_target_properties(test_preview PROPERTIES AUTOMOC ON)
     target_compile_features(test_preview PRIVATE cxx_std_20)
     target_include_directories(test_preview PRIVATE src)
@@ -31,6 +37,25 @@ if(OPENSWMM_DATA_BUILD_TESTS)
         SDK_DATA_PREVIEW_VERIFICATION_DIRECTORY="${PROJECT_SOURCE_DIR}/tests/verification/extension_events_2026-10/ev5/preview")
     add_test(NAME data_preview COMMAND test_preview)
     set_tests_properties(data_preview PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+    add_executable(test_payload tests/test_payload.cpp src/PayloadDownload.cpp src/PayloadDownload.hpp src/Catalog.cpp)
+    set_target_properties(test_payload PROPERTIES AUTOMOC ON)
+    target_compile_features(test_payload PRIVATE cxx_std_20)
+    target_include_directories(test_payload PRIVATE src)
+    target_link_libraries(test_payload PRIVATE OpenSWMMVis::Sdk Qt6::Test GDAL::GDAL)
+    target_compile_definitions(test_payload PRIVATE
+        SDK_DATA_PAYLOAD_VERIFICATION_DIRECTORY="${PROJECT_SOURCE_DIR}/tests/verification/payload_downloads"
+        SDK_DATA_PAYLOAD_FIXTURE_DIRECTORY="${PROJECT_SOURCE_DIR}/tests/data")
+    add_test(NAME data_payload COMMAND test_payload)
+    set_tests_properties(data_payload PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+    add_executable(test_commandicons tests/test_commandicons.cpp src/CommandIcons.cpp resources/openswmm_data_icons.qrc)
+    set_target_properties(test_commandicons PROPERTIES AUTOMOC ON AUTORCC ON)
+    target_compile_features(test_commandicons PRIVATE cxx_std_20)
+    target_include_directories(test_commandicons PRIVATE src)
+    target_link_libraries(test_commandicons PRIVATE Qt6::Widgets Qt6::Svg Qt6::Test)
+    target_compile_definitions(test_commandicons PRIVATE
+        SDK_DATA_ICON_VERIFICATION_DIRECTORY="${PROJECT_SOURCE_DIR}/tests/verification/plugin_ribbon_2026-10/icons")
+    add_test(NAME data_command_icons COMMAND test_commandicons)
+    set_tests_properties(data_command_icons PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
 endif()
 
 # Use the same docs/ working directory and HTML layout as the GUI.
