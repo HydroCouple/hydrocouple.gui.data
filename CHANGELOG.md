@@ -7,6 +7,7 @@ version, not evidence of a release tag.
 
 ## [Unreleased]
 
+- Share preview selection with the map: the select tool and native attribute table select Data rows, and Data rows select native preview features. DEM tile footprints now use the selectable native preview layer. Requires GUI SDK 1.8.
 - Require SDK 1.7 and automatically add completed USGS observations as native time-series layers, with retained station geometry and provenance.
 - Keep native import cancellable and bound to the originating model; report saved files separately from layer publication.
 - Detect conflicting duplicate observations before CSV deduplication and preserve their raw responses.

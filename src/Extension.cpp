@@ -52,10 +52,11 @@ public:
             !qobject_cast<IEventSourceV4 *>(lifetime) ||
             !qobject_cast<IViewControlsV1 *>(lifetime) ||
             !qobject_cast<ITimeSeriesLayersV1 *>(lifetime) ||
-            !qobject_cast<IProgressV1 *>(lifetime)) {
+            !qobject_cast<IProgressV1 *>(lifetime) ||
+            !qobject_cast<IPreviewLayersV1 *>(lifetime)) {
             if (error)
                 *error = tr(
-                    "Data sources requires SDK 1.7 lifecycle, view, activity, selected-feature, time-series layer and progress services.");
+                    "Data sources requires SDK 1.8 lifecycle, view, activity, selected-feature, preview-layer, time-series layer and progress services.");
             return false;
         }
         mHost = host;

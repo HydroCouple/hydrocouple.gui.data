@@ -49,26 +49,30 @@ attributes available for inspection, while disabling feature export. Preview the
 new area before saving. The feature export uses the frozen reviewed geometry and
 selected IDs.
 
-## Temporary USGS feature layer
+## Temporary preview feature layer
 
-The USGS preview is a normal feature layer for map inspection: use the layer's
-ordinary controls to open its attribute table, query or select monitoring
-locations, and change its point or label styling. It is temporary and is omitted
+The USGS site and DEM tile previews are normal feature layers for map inspection:
+use the layer's ordinary controls to open its attribute table, query or select
+monitoring locations or tiles, and change its point, polygon or label styling. It is temporary and is omitted
 from project saves. Closing the model or clearing the Data preview removes it. Explicitly
 save features when a persistent project layer is needed; previewing still fetches
 catalogue metadata only.
 
-Native layer queries and selections are independent of the Data dock's local
-filter and selected rows. The advanced **Save selected sites as a map layer** action saves selected,
-visible Data catalogue rows, rather than the native map layer's selection. A
-native query may further restrict what the map shows without narrowing the Data
-table. Sorting or selecting Data rows preserves the native preview's query,
-selection and styling when the displayed population is unchanged. Changing the
-Data-filtered population replaces the preview and resets those native settings.
+Selection is shared between the preview layer and the Data dock. Picking sites
+or tiles with the map **Select** tool, a rubber band or the layer's attribute
+table selects the matching Data rows; selecting Data rows selects them on the map
+and in the attribute table. An empty-space **Select** click clears both. The
+advanced **Save selected sites as a map layer** action saves the selected, visible
+Data catalogue rows. A native query may further restrict what the map shows
+without narrowing the Data table. Sorting Data rows preserves the native preview's
+query and styling when the displayed population is unchanged. Changing the
+Data-filtered population replaces the preview, resets its native query and
+styling, and carries the still-visible row selection into the new layer.
 
 USGS preview-layer updates remain observable through the GUI's usual layer events.
-The Data dock briefly disables its save action while the update's detailed source
-notifications are reconciled. Publishing a temporary layer does not itself grant
+The Data dock briefly disables its save and download actions while the update's
+detailed source notifications are reconciled; a row-driven map selection is such
+an update. Publishing a temporary layer does not itself grant
 authority to save under a changed area or boundary. Compatible older hosts may
 show the catalogue geometry as an overlay instead of exposing the native feature
 layer. Elevation footprints continue to use the geometry preview in this package.
@@ -171,9 +175,10 @@ model's map; saved files remain available if that model has closed.
 
 ## Typed review ownership and invalidation
 
-This package requires the installed GUI SDK **1.7**, its typed lifecycle,
+This package requires the installed GUI SDK **1.8**, its typed lifecycle,
 view/activity and native observation-import services, and its separately
-discoverable `IProgressV1` shared progress service. A review belongs to an exact Ready **open session**
+discoverable `IProgressV1` shared progress and `IPreviewLayersV1` preview-layer
+services. A review belongs to an exact Ready **open session**
 and load generation. Two open models may share a saved project UUID; switching
 between them never transfers a review. Focusing a utility document keeps the
 existing model context. Closing, failed loading or replacing that context stops
@@ -199,6 +204,7 @@ review, even if its current geometry happens to match the earlier snapshot.
 | Unrelated layer addition/removal/change | Refresh choices; keep the area | Refresh choices; keep the unchanged chosen attachment |
 | Layer style/order, result variable/playback, dock/command or utility focus | Keep | Keep |
 | Local attribute filter or table sorting/selection | Keep; supply filtered records to the map | Keep; supply filtered records to the map |
+| Preview-layer selection from the select tool, attribute table or Data rows | Keep; mirror rows and map, writes wait for detailed evidence | Keep; mirror rows and map, writes wait for detailed evidence |
 | Model context/load replacement or closure | Clear and cancel | Clear and cancel |
 
 The plugin subscribes before its initial snapshot. It keeps a separate adoption

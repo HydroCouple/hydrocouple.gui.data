@@ -18,6 +18,7 @@
 #include <sdk/IEventSourceV3.hpp>
 #include <sdk/IEventSourceV4.hpp>
 #include <sdk/IViewControlsV1.hpp>
+#include <sdk/IPreviewLayersV1.hpp>
 #include <sdk/ITimeSeriesLayersV1.hpp>
 #include <QPointer>
 #include <QWidget>
@@ -146,9 +147,16 @@ private:
     void updateAttributes();
     /** @brief Refresh visible, total and visible-selected counts. */
     void updateCounts();
+    /** @brief Select the catalogue rows of the native preview layer's selected features.
+     * @note Map select tool and native attribute-table changes arrive as LayerSelectionChanged. */
+    void pullNativeSelection();
+    /** @brief Replace the native preview layer's selection with the selected visible rows.
+     * @note The write advances the source revision; downloads wait for its detailed evidence. */
+    void pushNativeSelection();
     /** @brief Copy visible records in stable source order, independent of table sorting.
+     * @param[out] indices Optional mItems index of each returned record.
      * @return Owning records matching the current local predicate. */
-    QList<Item> visibleItems() const;
+    QList<Item> visibleItems(QList<int> *indices = nullptr) const;
     /** @brief Check display ownership against current native readiness, without granting export.
      * @return True only for the same Ready session and accepted load as the bound model. */
     bool displayIsCurrent() const;
@@ -185,6 +193,7 @@ private:
     Sdk::IEventSourceV3 *mViewSource = nullptr;     ///< Borrowed runtime attachment source.
     Sdk::IEventSourceV4 *mActivitySource = nullptr; ///< Borrowed actual document-focus source.
     Sdk::IViewControlsV1 *mViewControls = nullptr;  ///< Borrowed paged selected-FID query.
+    Sdk::IPreviewLayersV1 *mPreviewLayers = nullptr; ///< Borrowed native preview attachment lookup.
     Sdk::ITimeSeriesLayersV1 *mTimeSeriesLayers =
         nullptr;                     ///< Borrowed native dataset import service.
     Sdk::IJob *mImportJob = nullptr; ///< Borrowed host-owned native preparation job.
@@ -240,6 +249,7 @@ private:
     QPointer<QNetworkReply> mReply;      ///< Active policy-controlled reply.
     Sdk::IJob *mJob = nullptr;           ///< Borrowed host-retained current parsing job.
     QList<Item> mItems;                  ///< Owning complete exact-area records.
+    QList<int> mPublished; ///< mItems indices in the feature order of the shown preview.
     QJsonObject mArea;                   ///< Frozen reviewed geometry used for parsing/provenance.
     QJsonObject mProvenance;             ///< Actual response origin, separate from intended query.
     QUrl mQuery;                         ///< Frozen intended metadata query.
@@ -247,6 +257,7 @@ private:
     bool mValid = false;      ///< Complete results match the retained review authority.
     bool mHasDisplay = false; ///< An adopted catalogue may outlive current export authority.
     bool mFiltering = false; ///< Suppress intermediate selection publications during proxy changes.
+    bool mSyncingSelection = false; ///< Applying native preview selection to rows; do not echo it.
     bool mBusy = false;      ///< Preview request/parsing or a payload transfer is pending.
     bool mClosing = false;   ///< Widget destruction suppresses callbacks and publications.
 };

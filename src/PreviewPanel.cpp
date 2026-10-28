@@ -44,6 +44,7 @@
 #include <QTimer>
 #include <QUuid>
 #include <QVBoxLayout>
+#include <algorithm>
 #include <memory>
 #include <limits>
 
@@ -226,7 +227,7 @@ PreviewPanel::PreviewPanel(Sdk::ExtensionHost *host, QWidget *parent)
     mExport = new QPushButton(tr("Save selected rows as a map layer"), this);
     mExport->setObjectName("dataExport");
     mExport->setToolTip(tr("Save the selected, visible Data catalogue rows. "
-                           "The map layer's own selection is independent."));
+                           "Rows follow the preview layer's map selection."));
     detailsLayout->addWidget(mExport);
     auto *cacheRow = new QHBoxLayout;
     cacheRow->addWidget(mCache);
@@ -285,6 +286,10 @@ PreviewPanel::PreviewPanel(Sdk::ExtensionHost *host, QWidget *parent)
     connect(mInterval, &QComboBox::currentIndexChanged, this, [this]() { setBusy(mBusy); });
     connect(mTable->selectionModel(), &QItemSelectionModel::selectionChanged, this, [this]() {
         if (!mFiltering) {
+            const QPointer<PreviewPanel> self(this);
+            pushNativeSelection();
+            if (!self)
+                return;
             updateCounts();
             updateOverlay();
         }
@@ -390,10 +395,11 @@ PreviewPanel::PreviewPanel(Sdk::ExtensionHost *host, QWidget *parent)
     mActivitySource = qobject_cast<Sdk::IEventSourceV4 *>(mHostLifetime.data());
     mViewControls = qobject_cast<Sdk::IViewControlsV1 *>(mHostLifetime.data());
     mTimeSeriesLayers = qobject_cast<Sdk::ITimeSeriesLayersV1 *>(mHostLifetime.data());
+    mPreviewLayers = qobject_cast<Sdk::IPreviewLayersV1 *>(mHostLifetime.data());
     if (!mStateSource || !mViewSource || !mActivitySource || !mViewControls || !mTimeSeriesLayers ||
-        !qobject_cast<Sdk::IProgressV1 *>(mHostLifetime.data())) {
+        !mPreviewLayers || !qobject_cast<Sdk::IProgressV1 *>(mHostLifetime.data())) {
         mStatus->setText(tr(
-            "This Data panel requires the SDK 1.7 lifecycle, view, activity, time-series layer and progress services."));
+            "This Data panel requires the SDK 1.8 lifecycle, view, activity, preview-layer, time-series layer and progress services."));
         setBusy(false);
         return;
     }
@@ -542,6 +548,7 @@ void PreviewPanel::invalidate(const QString &message, bool retainDisplay)
     if (!retainDisplay) {
         mHasDisplay = false;
         mItems.clear();
+        mPublished.clear();
     }
     mArea = {};
     mProvenance = {};
@@ -997,6 +1004,10 @@ void PreviewPanel::viewChanged(const Sdk::ViewEvent &event)
     if (event.kind == ViewEventKind::LayerAdded || event.kind == ViewEventKind::LayerRemoved ||
         event.kind == ViewEventKind::LayerMetadataChanged || relevant)
         refreshLayers();
+    if (self && event.kind == ViewEventKind::LayerSelectionChanged &&
+        !event.layerSessionId.isNull() &&
+        event.layerSessionId == mPreviewLayers->previewLayer(mSessionId))
+        pullNativeSelection();
     if (self)
         observeRevision(event.session);
 }
@@ -1411,9 +1422,11 @@ QList<Item> PreviewPanel::selectedItems() const
     }
     return result;
 }
-QList<Item> PreviewPanel::visibleItems() const
+QList<Item> PreviewPanel::visibleItems(QList<int> *indices) const
 {
     QList<Item> result;
+    if (indices)
+        indices->clear();
     // Source order makes a table sort or row selection an identical map update,
     // preserving the native preview layer's query, style and selected FIDs.
     for (int row = 0; row < mModel->rowCount(); ++row) {
@@ -1422,8 +1435,11 @@ QList<Item> PreviewPanel::visibleItems() const
             continue;
         bool ok = false;
         const int i = source.data(Qt::UserRole).toInt(&ok);
-        if (ok && i >= 0 && i < mItems.size())
+        if (ok && i >= 0 && i < mItems.size()) {
             result.append(mItems[i]);
+            if (indices)
+                indices->append(i);
+        }
     }
     return result;
 }
@@ -1456,6 +1472,80 @@ void PreviewPanel::updateCounts()
                          .arg(mFilter->rowCount())
                          .arg(mItems.size())
                          .arg(selectedItems().size()));
+}
+void PreviewPanel::pullNativeSelection()
+{
+    if (mFiltering || mSyncingSelection || !mHostLifetime || !mModelLifetime)
+        return;
+    const QPointer<PreviewPanel> self(this);
+    QList<qint64> fids;
+    const auto attachment = mPreviewLayers->previewLayer(mSessionId, &fids);
+    if (!self || attachment.isNull() || fids.size() != mPublished.size())
+        return;
+    const auto native = mViewControls->selectedLayerFeatures(mSessionId, attachment, 0, 5000);
+    if (!self)
+        return;
+    const QSet<qint64> chosen(native.cbegin(), native.cend());
+    QSet<int> wanted, current;
+    QItemSelection rows;
+    QModelIndex first;
+    for (qsizetype i = 0; i < fids.size(); ++i) {
+        if (!chosen.contains(fids[i]))
+            continue;
+        // apply() stores record i in source row i.
+        const auto row = mFilter->mapFromSource(mModel->index(mPublished[i], 0));
+        if (!row.isValid())
+            continue;
+        wanted.insert(mPublished[i]);
+        rows.select(row, row);
+        if (!first.isValid() || row.row() < first.row())
+            first = row;
+    }
+    for (const auto &row : mTable->selectionModel()->selectedRows())
+        current.insert(mFilter->mapToSource(row).data(Qt::UserRole).toInt());
+    if (wanted == current)
+        return;
+    mSyncingSelection = true;
+    const auto release = qScopeGuard([self] {
+        if (self)
+            self->mSyncingSelection = false;
+    });
+    mTable->selectionModel()->select(rows, QItemSelectionModel::ClearAndSelect |
+                                               QItemSelectionModel::Rows);
+    if (!self || !first.isValid())
+        return;
+    mTable->selectionModel()->setCurrentIndex(first, QItemSelectionModel::NoUpdate);
+    if (self)
+        mTable->scrollTo(first);
+}
+void PreviewPanel::pushNativeSelection()
+{
+    if (mFiltering || mSyncingSelection || !mHostLifetime || !mModelLifetime)
+        return;
+    const QPointer<PreviewPanel> self(this);
+    QList<qint64> fids;
+    const auto attachment = mPreviewLayers->previewLayer(mSessionId, &fids);
+    if (!self || attachment.isNull() || fids.size() != mPublished.size())
+        return;
+    QSet<int> chosen;
+    for (const auto &row : mTable->selectionModel()->selectedRows())
+        chosen.insert(mFilter->mapToSource(row).data(Qt::UserRole).toInt());
+    QList<qint64> desired;
+    for (qsizetype i = 0; i < fids.size(); ++i)
+        if (chosen.contains(mPublished[i]))
+            desired.append(fids[i]);
+    std::sort(desired.begin(), desired.end());
+    if (mViewControls->selectedLayerFeatures(mSessionId, attachment, 0, 5000) == desired || !self)
+        return;
+    Sdk::ViewCommand command;
+    command.kind = Sdk::ViewCommandKind::SelectLayerFeatures;
+    command.sessionId = mSessionId;
+    command.loadGeneration = mLoadGeneration;
+    command.layerSessionId = attachment;
+    command.featureIds = desired;
+    QString error;
+    if (!mViewControls->executeViewCommand(command, &error) && self)
+        mPreviewProgress.log("warning", tr("The map selection was not updated: %1").arg(error));
 }
 void PreviewPanel::updateAttributes()
 {
@@ -1544,7 +1634,8 @@ void PreviewPanel::updateOverlay()
     }
     if (mValid && !reviewedSourceCurrent && !validateReview())
         return;
-    const auto visible = visibleItems();
+    QList<int> published;
+    const auto visible = visibleItems(&published);
     auto collection = featureCollection(visible);
     if (mSource->currentIndex() == 0) {
         // The style hint belongs only to this transient display. Saved source
@@ -1563,6 +1654,9 @@ void PreviewPanel::updateOverlay()
             features[i] = feature;
         }
         collection["features"] = features;
+    } else {
+        collection["previewStyle"] =
+            QJsonObject{{"asFeatureLayer", true}, {"title", tr("DEM tiles (preview)")}};
     }
     QString error;
     const bool shown = mProject->showPreview(collection, &error);
@@ -1571,6 +1665,13 @@ void PreviewPanel::updateOverlay()
             mStatus->setText(error);
     if (!self || generation != mGeneration)
         return;
+    if (shown) {
+        mPublished = published;
+        // A replacement preview layer starts unselected; carry the rows into it.
+        pushNativeSelection();
+        if (!self || generation != mGeneration)
+            return;
+    }
     const bool stillCurrent = displayIsCurrent();
     if (!self || generation != mGeneration)
         return;

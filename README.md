@@ -1,7 +1,7 @@
 # OpenSWMM Data Sources
 
 An independently built native plugin for `openswmm.gui`, consuming the installed
-GUI SDK 1.7, matching Qt with Qt SVG, and GDAL. The SDK and plugin host remain in the GUI repo.
+GUI SDK 1.8, matching Qt with Qt SVG, and GDAL. The SDK and plugin host remain in the GUI repo.
 
 The source repository is [HydroCouple/hydrocouple.gui.data](https://github.com/HydroCouple/hydrocouple.gui.data).
 The plugin identity remains `openswmm.gui.data`; the hosted repository name does
@@ -43,13 +43,15 @@ The plugin adds its own **Data** ribbon tab. Its **USGS time series…** and
 **Elevation raster…** commands open the **Data sources** dock. The
 monitoring-gage and elevation/raster icons follow the GUI's light/dark palette and
 remain visible in command menus. See [the guide](docs/guide.md).
-After **Preview**, **USGS gages (preview)** provides the usual map-layer attribute
-table, query, selection and styling controls. Select a Data catalogue row to
-inspect every saved property, or use the Data attribute filter to narrow the
-records supplied to the map. Data row selection and native map-layer selection
-are independent: the advanced **Save selected sites/footprints as a map layer** action saves the selected,
-visible Data rows. Sorting or selecting Data rows preserves an unchanged native
-preview population; changing that population resets its native query and styling.
+After **Preview**, **USGS gages (preview)** or **DEM tiles (preview)** provides the
+usual map-layer attribute table, query, selection and styling controls. Select a
+Data catalogue row to inspect every saved property, or use the Data attribute
+filter to narrow the records supplied to the map. Selection is shared: the map
+**Select** tool and the layer's attribute table select Data rows, and Data rows
+select the map features. The advanced **Save selected sites/footprints as a map
+layer** action saves the selected, visible Data rows. Sorting Data rows preserves
+an unchanged native preview population; changing that population resets its
+native query and styling.
 The preview is omitted from project saves; an explicit feature export is persistent.
 Moving the viewport keeps a completed preview available for inspection, but a
 fresh preview is required before saving features from the new area. Attributes
@@ -57,8 +59,8 @@ describe the recorded catalogue response. The download controls choose the actua
 observation period and measurement; an empty response does not imply zero flow.
 Use **Details and advanced options** for the full saved-property table and filters.
 All new C++ interfaces and source files use Doxygen comments. The plugin requires
-SDK 1.7 typed lifecycle, view, UI activity, native time-series import and shared
-progress services. Review ownership uses the
+SDK 1.8 typed lifecycle, view, UI activity, native time-series import, shared
+progress and preview-layer services. Review ownership uses the
 per-open session and load generation, including when two models share a saved UUID.
 The guide distinguishes retained display from export authority and documents how
 pending native changes are fenced.

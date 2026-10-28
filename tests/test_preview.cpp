@@ -17,6 +17,7 @@
 #include <sdk/IEventSourceV3.hpp>
 #include <sdk/IEventSourceV4.hpp>
 #include <sdk/IViewControlsV1.hpp>
+#include <sdk/IPreviewLayersV1.hpp>
 #include <sdk/ITimeSeriesLayersV1.hpp>
 #include <QCheckBox>
 #include <QComboBox>
@@ -35,6 +36,7 @@
 #include <QNetworkRequest>
 #include <QPushButton>
 #include <QScopeGuard>
+#include <QSet>
 #include <QSignalSpy>
 #include <QTabBar>
 #include <QTableView>
@@ -207,6 +209,9 @@ public:
     int overlayWrites = 0;              ///< Count only successful nonempty preview publications.
     std::function<void()>
         previewChanged; ///< Optional native-layer mutation after changed preview content.
+    QUuid previewAttachment;       ///< Native preview layer, replaced when its features change.
+    QList<qint64> previewFids;     ///< Native FIDs in feature order; deliberately not 0..n-1.
+    QSet<qint64> previewSelection; ///< Native preview-layer selection.
     QUuid id() const override;
     QString path() const override { return folder + "/model.oswp"; }
     QString directory() const override { return folder; }
@@ -275,11 +280,25 @@ public:
         const bool changed = overlay != value;
         overlay = value;
         ++overlayWrites;
+        if (changed && value["previewStyle"].toObject()["asFeatureLayer"].toBool()) {
+            // Like GDAL with string IDs, FIDs need not equal feature positions.
+            previewAttachment = QUuid::createUuid();
+            previewFids.clear();
+            for (qsizetype i = 0; i < value["features"].toArray().size(); ++i)
+                previewFids.append(500 - 7 * i);
+            previewSelection.clear();
+        }
         if (changed && previewChanged)
             previewChanged();
         return true;
     }
-    void clearPreview() override { overlay = {}; }
+    void clearPreview() override
+    {
+        overlay = {};
+        previewAttachment = {};
+        previewFids.clear();
+        previewSelection.clear();
+    }
 };
 
 /** @brief Public model facade with a separate QObject lifetime and persistent identity. */
@@ -353,6 +372,7 @@ class Host final : public QObject,
                    public IEventSourceV3,
                    public IEventSourceV4,
                    public IViewControlsV1,
+                   public IPreviewLayersV1,
                    public ITimeSeriesLayersV1,
                    public ProgressRecorder,
                    public ISettings,
@@ -362,7 +382,8 @@ class Host final : public QObject,
     Q_OBJECT
     Q_INTERFACES(
         OpenSWMM::Sdk::IEventSourceV2 OpenSWMM::Sdk::IEventSourceV3 OpenSWMM::Sdk::IEventSourceV4
-            OpenSWMM::Sdk::IViewControlsV1 OpenSWMM::Sdk::ITimeSeriesLayersV1 OpenSWMM::Sdk::IProgressV1)
+            OpenSWMM::Sdk::IViewControlsV1 OpenSWMM::Sdk::IPreviewLayersV1
+                OpenSWMM::Sdk::ITimeSeriesLayersV1 OpenSWMM::Sdk::IProgressV1)
 public:
     /** @brief Bind the fake scoped progress capability to this host lifetime. */
     Host() : ProgressRecorder(this) {}
@@ -388,6 +409,7 @@ public:
     std::function<void()>
         jobCreated;       ///< Optional synchronous lifetime mutation before runJob returns.
     QStringList messages; ///< Plain diagnostics for inspection.
+    int selectionCommands = 0; ///< Accepted native preview-selection replacements.
 
     QList<TimeSeriesImportRequest> imports; ///< Complete descriptor publication attempts.
     std::function<void(const TimeSeriesImportResult &)> importFinished; ///< Held native completion.
@@ -654,13 +676,53 @@ public:
                     callback(event);
             });
     }
-    bool executeViewCommand(const ViewCommand &, QString *) override { return false; }
+    /** @brief Model a native select-tool or attribute-table change of the preview layer. */
+    void mapSelect(Entry *entry, const QList<qint64> &fids)
+    {
+        auto &project = entry->model->projectValue;
+        project.previewSelection = QSet<qint64>(fids.cbegin(), fids.cend());
+        viewChange(entry, ViewEventKind::LayerSelectionChanged, project.previewAttachment);
+    }
+    /** @brief Accept only preview-layer selection replacements for the exact Ready load. */
+    bool executeViewCommand(const ViewCommand &command, QString *) override
+    {
+        for (const auto &entry : entries) {
+            const auto &project = entry->model->projectValue;
+            if (command.kind == ViewCommandKind::SelectLayerFeatures &&
+                entry->state.sessionId == command.sessionId &&
+                entry->state.loadGeneration == command.loadGeneration &&
+                !project.previewAttachment.isNull() &&
+                command.layerSessionId == project.previewAttachment) {
+                ++selectionCommands;
+                mapSelect(entry.get(), command.featureIds);
+                return true;
+            }
+        }
+        return false;
+    }
+    /** @brief Resolve the fake host-owned preview layer and its feature-order FIDs. */
+    QUuid previewLayer(const QUuid &session, QList<qint64> *fids) const override
+    {
+        if (fids)
+            fids->clear();
+        for (const auto &entry : entries)
+            if (!stopping && entry->state.sessionId == session &&
+                !entry->model->projectValue.previewAttachment.isNull()) {
+                if (fids)
+                    *fids = entry->model->projectValue.previewFids;
+                return entry->model->projectValue.previewAttachment;
+            }
+        return {};
+    }
     QList<qint64> selectedLayerFeatures(const QUuid &session, const QUuid &attachment, int offset,
                                         int limit) const override
     {
         QList<qint64> selected;
         for (const auto &entry : entries)
-            if (entry->state.sessionId == session)
+            if (entry->state.sessionId == session && !attachment.isNull() &&
+                attachment == entry->model->projectValue.previewAttachment)
+                selected = entry->model->projectValue.previewSelection.values();
+            else if (entry->state.sessionId == session)
                 for (const auto &layer : entry->view.layers)
                     if (layer.layerSessionId == attachment)
                         for (const auto &feature : entry->model->projectValue.features)
@@ -761,8 +823,28 @@ struct Fixture {
     }
     /** @brief Read the user-visible catalogue row count. */
     int rows() const { return control<QTableView>("dataCatalogue")->model()->rowCount(); }
-    /** @brief Select the reviewed item and allow the UI to enable explicit GIS export. */
-    void select() { control<QTableView>("dataCatalogue")->selectRow(0); }
+    /** @brief Select the reviewed item and allow the UI to enable explicit GIS export.
+     * @details The row also selects the native preview feature. Its evidence is
+     * delivered next, as on the host's next turn, unless the case already holds
+     * earlier observations; held cases keep their deliberate delivery order. */
+    void select()
+    {
+        const bool settled = host.pendingState.isEmpty() && host.pendingViews.isEmpty() &&
+                             host.pendingActivity.isEmpty();
+        control<QTableView>("dataCatalogue")->selectRow(0);
+        if (settled)
+            host.drain();
+    }
+    /** @brief Read the catalogue IDs of the selected rows, sorted for comparison. */
+    QStringList selectedIds() const
+    {
+        QStringList result;
+        auto *table = control<QTableView>("dataCatalogue");
+        for (const auto &row : table->selectionModel()->selectedRows(1))
+            result.append(row.data().toString());
+        result.sort();
+        return result;
+    }
     /** @brief Return the current chosen attachment, independently from its stable local key. */
     QUuid attachment() const { return entry->view.layers.first().layerSessionId; }
     /** @brief Copy the source's present overlay value. */
@@ -1085,7 +1167,8 @@ private slots:
         table->selectRow(1);
         QCOMPARE(f.overlayCount(), 3);
         QCOMPARE(f.entry->model->projectValue.overlay, population);
-        QVERIFY(f.control<QPushButton>("dataExport")->isEnabled());
+        // The rows also selected native features; deliver that evidence first.
+        QTRY_VERIFY((f.host.drain(), f.control<QPushButton>("dataExport")->isEnabled()));
         f.exportSelection();
         QCOMPARE(f.entry->model->projectValue.exports.size(), 1);
         QFile file(f.entry->model->projectValue.exports.first());
@@ -1097,6 +1180,100 @@ private slots:
         QCOMPARE(features.first().toObject()["id"].toString(), "site-two");
         QCOMPARE(features.first().toObject()["properties"].toObject()["drainage_area"].toString(),
                  "25");
+    }
+    /** @brief Select-tool changes on the preview layer select matching rows of a sorted table. */
+    void mapSelectionSelectsCatalogueRows()
+    {
+        Fixture f;
+        QVERIFY(f.record(richCatalogue()));
+        QVERIFY(f.review());
+        const auto &project = f.entry->model->projectValue;
+        QCOMPARE(project.previewFids.size(), 3);
+        auto *table = f.control<QTableView>("dataCatalogue");
+        table->sortByColumn(0, Qt::DescendingOrder);
+        f.host.mapSelect(f.entry, {project.previewFids[1], project.previewFids[2]});
+        f.host.drain();
+        QCOMPARE(f.selectedIds(), (QStringList{"site-three", "site-two"}));
+        QCOMPARE(f.control<QLabel>("dataResultCount")->text(), "3 shown / 3 total / 2 selected");
+        // The topmost selected row becomes current for attribute inspection.
+        QCOMPARE(f.attribute("catalogue_id").toString(), "site-three");
+        QCOMPARE(f.host.selectionCommands, 0);
+        QTRY_VERIFY(f.control<QPushButton>("dataDownload")->isEnabled());
+        QCOMPARE(f.host.selectionCommands, 0);
+        // An empty-space select-tool click clears the rows and the download.
+        f.host.mapSelect(f.entry, {});
+        f.host.drain();
+        QVERIFY(f.selectedIds().isEmpty());
+        QVERIFY(!f.control<QPushButton>("dataDownload")->isEnabled());
+        QCOMPARE(f.host.selectionCommands, 0);
+    }
+    /** @brief Row selection replaces the native selection once and waits for its evidence. */
+    void catalogueRowsSelectNativePreviewFeatures()
+    {
+        Fixture f;
+        QVERIFY(f.record(richCatalogue()));
+        QVERIFY(f.review());
+        const auto &project = f.entry->model->projectValue;
+        auto *table = f.control<QTableView>("dataCatalogue");
+        table->sortByColumn(0, Qt::DescendingOrder);
+        QCOMPARE(table->model()->index(1, 1).data().toString(), "site-two");
+        table->selectRow(1);
+        QCOMPARE(project.previewSelection, (QSet<qint64>{project.previewFids[1]}));
+        QCOMPARE(f.host.selectionCommands, 1);
+        // The native write is a source revision, not review authority.
+        QVERIFY(!f.control<QPushButton>("dataDownload")->isEnabled());
+        f.host.drain();
+        QTRY_VERIFY(f.control<QPushButton>("dataDownload")->isEnabled());
+        QCOMPARE(f.host.selectionCommands, 1);
+        QCOMPARE(f.selectedIds(), QStringList{"site-two"});
+        table->clearSelection();
+        QVERIFY(project.previewSelection.isEmpty());
+        QCOMPARE(f.host.selectionCommands, 2);
+    }
+    /** @brief A filtered replacement layer receives the still-visible row selection. */
+    void filteredReplacementCarriesRowSelection()
+    {
+        Fixture f;
+        QVERIFY(f.record(richCatalogue()));
+        QVERIFY(f.review());
+        const auto &project = f.entry->model->projectValue;
+        auto *table = f.control<QTableView>("dataCatalogue");
+        table->selectRow(0);
+        table->selectionModel()->select(table->model()->index(2, 0),
+                                        QItemSelectionModel::Select | QItemSelectionModel::Rows);
+        QCOMPARE(f.selectedIds(), (QStringList{"site-one", "site-three"}));
+        QTRY_VERIFY((f.host.drain(), f.control<QPushButton>("dataDownload")->isEnabled()));
+        const auto original = project.previewAttachment;
+        // One predicate step hides only Gamma Lake; the selected Alpha row stays visible.
+        QVERIFY(f.filter({}, "Contains", "USGS"));
+        QTRY_VERIFY((f.host.drain(), f.control<QPushButton>("dataDownload")->isEnabled()));
+        QCOMPARE(f.overlayCount(), 2);
+        QVERIFY(project.previewAttachment != original);
+        QCOMPARE(f.selectedIds(), QStringList{"site-one"});
+        QCOMPARE(project.previewSelection, (QSet<qint64>{project.previewFids[0]}));
+    }
+    /** @brief DEM footprints use the selectable native preview layer like monitoring sites. */
+    void demFootprintsUseSelectableNativeLayer()
+    {
+        Fixture f;
+        f.panel->setSource(OpenSWMM::Data::Source::Terrain);
+        const QByteArray tiles = R"({"total":2,"items":[{"sourceId":"dem-a","title":"Tile A","boundingBox":{"minX":-78,"minY":39,"maxX":-76,"maxY":42},"downloadURL":"https://example.test/a.tif"},{"sourceId":"dem-b","title":"Tile B","boundingBox":{"minX":-76.8,"minY":40.2,"maxX":-76.2,"maxY":40.8},"downloadURL":"https://example.test/b.tif"}]})";
+        QVERIFY(f.record(tiles));
+        QVERIFY(f.review());
+        const auto &project = f.entry->model->projectValue;
+        const auto style = project.overlay["previewStyle"].toObject();
+        QVERIFY(style["asFeatureLayer"].toBool());
+        QCOMPARE(style["title"].toString(), "DEM tiles (preview)");
+        QVERIFY(!style.contains("pointLabelProperty"));
+        QCOMPARE(project.previewFids.size(), 2);
+        f.host.mapSelect(f.entry, {project.previewFids[1]});
+        f.host.drain();
+        QCOMPARE(f.selectedIds(), QStringList{"dem-b"});
+        QTRY_VERIFY(f.control<QPushButton>("dataDownload")->isEnabled());
+        QCOMPARE(f.control<QPushButton>("dataDownload")->text(), "Download selected raster tiles…");
+        f.panel->clearPreview();
+        QVERIFY(project.previewAttachment.isNull());
+        QVERIFY(f.selectedIds().isEmpty());
     }
     /** @brief A real temporary-layer insertion retains results until detailed revision evidence arrives. */
     void nativePreviewInsertionWaitsForDetailedEvidence()
