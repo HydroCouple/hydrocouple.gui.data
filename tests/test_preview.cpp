@@ -22,21 +22,28 @@
 #include <QComboBox>
 #include <QDir>
 #include <QDateEdit>
+#include <QDockWidget>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMainWindow>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QPushButton>
+#include <QScopeGuard>
+#include <QSignalSpy>
+#include <QTabBar>
 #include <QTableView>
 #include <QTest>
 #include <QThread>
 #include <QTimer>
 #include <QToolButton>
+#include <QTreeView>
+#include <QVBoxLayout>
 #include <algorithm>
 #include <cstring>
 #include <memory>
@@ -486,12 +493,14 @@ public:
                 event.layerId = value.layerId;
         pendingViews.append(event);
     }
-    /** @brief Simulate a later observer entering a nested loop before the detailed V3 event. */
-    void drainFirstState()
+    /** @brief Deliver one state observation, optionally including a nested posted-callback turn.
+     * @param[in] processPosted True models a later observer entering a nested event loop. */
+    void drainFirstState(bool processPosted = true)
     {
         if (!pendingState.isEmpty())
             emit stateCommitted(pendingState.takeFirst());
-        QCoreApplication::processEvents();
+        if (processPosted)
+            QCoreApplication::processEvents();
     }
     /** @brief Deliver held observations in their actual shared source order, then deferred rebases. */
     void drain()
@@ -1545,6 +1554,317 @@ private slots:
         f.select();
         QVERIFY(f.control<QPushButton>("dataExport")->isEnabled());
         QVERIFY(f.hasOverlay());
+    }
+    /** @brief Utility/model tab focus preserves the same reviewed source and its selected download rows. */
+    void tabRoundTripKeepsDownloadSelection_data()
+    {
+        QTest::addColumn<bool>("boundary");
+        QTest::newRow("viewport") << false;
+        QTest::newRow("polygon") << true;
+    }
+    void tabRoundTripKeepsDownloadSelection()
+    {
+        QFETCH(bool, boundary);
+        Fixture f;
+        if (boundary)
+            f.polygonMode();
+        QVERIFY(f.review());
+        f.select();
+        QVERIFY(f.control<QPushButton>("dataDownload")->isEnabled());
+        const auto writes = f.entry->model->projectValue.overlayWrites;
+        const auto overlay = f.entry->model->projectValue.overlay;
+        f.host.activate(nullptr);
+        f.host.active = nullptr; // A utility document need not expose a cached model facade.
+        f.host.drain();
+        QCOMPARE(f.rows(), 1);
+        QCOMPARE(f.entry->model->projectValue.overlayWrites, writes);
+        QVERIFY(f.control<QPushButton>("dataDownload")->isEnabled());
+        f.host.activate(f.entry);
+        f.host.drain();
+        QCOMPARE(f.entry->model->projectValue.overlay, overlay);
+        QCOMPARE(f.entry->model->projectValue.overlayWrites, writes);
+        QVERIFY(f.control<QPushButton>("dataDownload")->isEnabled());
+    }
+    /** @brief The real Data sources/Layers dock tabs preserve viewport space and reviewed downloads. */
+    void realDockTabRoundTripKeepsDownload_data()
+    {
+        QTest::addColumn<bool>("boundary");
+        QTest::addColumn<bool>("pendingPresentation");
+        QTest::newRow("viewport clean") << false << false;
+        QTest::newRow("viewport pending presentation") << false << true;
+        QTest::newRow("polygon clean") << true << false;
+        QTest::newRow("polygon pending presentation") << true << true;
+    }
+    void realDockTabRoundTripKeepsDownload()
+    {
+        QFETCH(bool, boundary);
+        QFETCH(bool, pendingPresentation);
+        QMainWindow window;
+        window.resize(1400, 950);
+        auto *canvas = new QWidget(&window);
+        canvas->setMinimumSize(400, 240);
+        window.setCentralWidget(canvas);
+        Fixture f;
+        if (boundary)
+            f.polygonMode();
+        auto *layers = new QDockWidget("Layers", &window);
+        auto *layerContent = new QWidget(layers);
+        auto *layerLayout = new QVBoxLayout(layerContent);
+        layerLayout->addWidget(new QLineEdit(layerContent));
+        layerLayout->addWidget(new QTreeView(layerContent));
+        layers->setWidget(layerContent);
+        auto *data = new QDockWidget("Data sources", &window);
+        data->setWidget(f.panel.get());
+        const auto detach = qScopeGuard([&] {
+            data->setWidget(nullptr);
+            f.panel->setParent(nullptr);
+        });
+        window.addDockWidget(Qt::LeftDockWidgetArea, layers);
+        window.addDockWidget(Qt::LeftDockWidgetArea, data);
+        window.tabifyDockWidget(layers, data);
+        data->raise();
+        window.show();
+        QCoreApplication::processEvents();
+        QTabBar *tabs = nullptr;
+        int dataTab = -1, layersTab = -1;
+        for (auto *bar : window.findChildren<QTabBar *>()) {
+            for (int i = 0; i < bar->count(); ++i) {
+                if (bar->tabText(i) == "Data sources") {
+                    tabs = bar;
+                    dataTab = i;
+                } else if (bar->tabText(i) == "Layers")
+                    layersTab = i;
+            }
+        }
+        QVERIFY(tabs);
+        QVERIFY(dataTab >= 0 && layersTab >= 0);
+        QTest::mouseClick(tabs, Qt::LeftButton, Qt::NoModifier, tabs->tabRect(dataTab).center());
+        QCoreApplication::processEvents();
+        QCOMPARE(tabs->currentIndex(), dataTab);
+        QVERIFY(f.review());
+        f.select();
+        QVERIFY(f.control<QPushButton>("dataDownload")->isEnabled());
+        QCoreApplication::processEvents();
+        window.layout()->activate();
+        QCoreApplication::processEvents();
+        const QRect canvasRect = canvas->geometry();
+        const auto population = f.entry->model->projectValue.overlay;
+        const auto jobs = f.host.jobs.size();
+        int replacements = 0;
+        f.entry->model->projectValue.previewChanged = [&] { ++replacements; };
+        QTest::mouseClick(tabs, Qt::LeftButton, Qt::NoModifier, tabs->tabRect(layersTab).center());
+        QCoreApplication::processEvents();
+        QCOMPARE(tabs->currentIndex(), layersTab);
+        QCOMPARE(canvas->geometry(), canvasRect);
+        if (pendingPresentation) {
+            f.host.stateChange(f.entry, StateChange::Layers);
+            f.host.viewChange(f.entry, ViewEventKind::LayerMetadataChanged, QUuid::createUuid());
+        }
+        QTest::mouseClick(tabs, Qt::LeftButton, Qt::NoModifier, tabs->tabRect(dataTab).center());
+        QCoreApplication::processEvents();
+        QCOMPARE(tabs->currentIndex(), dataTab);
+        QCOMPARE(canvas->geometry(), canvasRect);
+        f.control<QTableView>("dataCatalogue")->clearSelection();
+        f.select();
+        if (pendingPresentation)
+            QVERIFY(!f.control<QPushButton>("dataDownload")->isEnabled());
+        f.host.drain();
+        QTRY_VERIFY(f.control<QPushButton>("dataDownload")->isEnabled());
+        QCOMPARE(f.entry->model->projectValue.overlay, population);
+        QCOMPARE(replacements, 0);
+        QCOMPARE(f.host.jobs.size(), jobs);
+        f.entry->model->projectValue.previewChanged = {};
+    }
+    /** @brief A delivered unchanged viewport category does not revoke a completed viewport review. */
+    void unchangedViewportTabNotificationKeepsDownload()
+    {
+        Fixture f;
+        QVERIFY(f.review());
+        f.select();
+        const auto writes = f.entry->model->projectValue.overlayWrites;
+        f.host.activate(nullptr);
+        f.host.stateChange(f.entry, StateChange::Viewport);
+        f.host.drain();
+        QCOMPARE(f.rows(), 1);
+        QCOMPARE(f.entry->model->projectValue.overlayWrites, writes);
+        QVERIFY(f.control<QPushButton>("dataDownload")->isEnabled());
+        f.host.activate(f.entry);
+        f.host.drain();
+        QVERIFY(f.control<QPushButton>("dataDownload")->isEnabled());
+    }
+    /** @brief A transient layout resize restores the completed review only at its original final area. */
+    void transientViewportResizeKeepsCompletedDownload()
+    {
+        Fixture f;
+        QVERIFY(f.review());
+        f.select();
+        QVERIFY(f.control<QPushButton>("dataDownload")->isEnabled());
+        const auto jobs = f.host.jobs.size();
+        const auto area = f.entry->model->projectValue.viewport;
+        f.entry->model->projectValue.viewport = polygon(true);
+        f.host.stateChange(f.entry, StateChange::Viewport);
+        f.host.drainFirstState(false);
+        QCOMPARE(f.rows(), 1);
+        QVERIFY(!f.control<QPushButton>("dataDownload")->isEnabled());
+        auto *table = f.control<QTableView>("dataCatalogue");
+        table->clearSelection();
+        f.select();
+        QVERIFY(!f.control<QPushButton>("dataExport")->isEnabled());
+        f.entry->model->projectValue.viewport = area;
+        f.host.stateChange(f.entry, StateChange::Viewport);
+        f.host.drain();
+        QTRY_VERIFY(f.control<QPushButton>("dataDownload")->isEnabled());
+        QVERIFY(f.control<QPushButton>("dataExport")->isEnabled());
+        QCOMPARE(f.rows(), 1);
+        QCOMPARE(f.host.jobs.size(), jobs);
+    }
+    /** @brief A settled pan/CRS change revokes the review and cannot later revive without Preview. */
+    void finalViewportChangeStillRevokesDownload_data()
+    {
+        QTest::addColumn<bool>("crs");
+        QTest::newRow("pan or zoom") << false;
+        QTest::newRow("canvas CRS") << true;
+    }
+    void finalViewportChangeStillRevokesDownload()
+    {
+        QFETCH(bool, crs);
+        Fixture f;
+        QVERIFY(f.review());
+        f.select();
+        const auto area = f.entry->model->projectValue.viewport;
+        if (crs)
+            f.entry->model->projectValue.projectCrs = "EPSG:3857";
+        else
+            f.entry->model->projectValue.viewport = polygon(true);
+        f.host.stateChange(f.entry, StateChange::Viewport);
+        f.host.drainFirstState(false);
+        QVERIFY(!f.control<QPushButton>("dataDownload")->isEnabled());
+        f.host.drain();
+        QCOMPARE(f.rows(), 1);
+        QVERIFY(f.hasOverlay());
+        f.select();
+        QVERIFY(!f.control<QPushButton>("dataDownload")->isEnabled());
+        // Returning after a genuine change has settled cannot resurrect old authority.
+        f.entry->model->projectValue.viewport = area;
+        f.entry->model->projectValue.projectCrs = "EPSG:4326";
+        f.host.stateChange(f.entry, StateChange::Viewport);
+        f.host.drain();
+        f.select();
+        QVERIFY(!f.control<QPushButton>("dataDownload")->isEnabled());
+        QVERIFY(f.review());
+        f.select();
+        QVERIFY(f.control<QPushButton>("dataDownload")->isEnabled());
+    }
+    /** @brief Viewport mutations cancel pending work immediately instead of treating it as a completed review. */
+    void viewportMutationCancelsActiveWork_data()
+    {
+        QTest::addColumn<int>("mode");
+        QTest::newRow("preview parser") << 0;
+        QTest::newRow("payload download") << 1;
+        QTest::newRow("native import") << 2;
+    }
+    void viewportMutationCancelsActiveWork()
+    {
+        QFETCH(int, mode);
+        Fixture f;
+        QVERIFY(f.review(mode != 0));
+        auto *payload = f.panel->findChild<OpenSWMM::Data::PayloadDownload *>();
+        QVERIFY(payload);
+        QSignalSpy finished(payload, &OpenSWMM::Data::PayloadDownload::finished);
+        Job *job = mode == 0 ? f.host.jobs.back().get() : nullptr;
+        QPointer<Reply> reply;
+        if (mode == 1) {
+            f.select();
+            f.panel->downloadTo(f.directory + "/transfer");
+            QVERIFY(payload->isRunning());
+            QTRY_VERIFY(f.host.policy.reply);
+            reply = f.host.policy.reply;
+        } else if (mode == 2) {
+            OpenSWMM::Data::PayloadResult saved;
+            saved.importId = QUuid::createUuid();
+            saved.observationCount = 1;
+            saved.manifestPath = f.directory + "/manifest.json";
+            saved.descriptorPath = f.directory + "/timeseries-import.json";
+            payload->finished(saved);
+            QCOMPARE(f.host.imports.size(), 1);
+            job = f.host.jobs.back().get();
+        }
+        const auto area = f.entry->model->projectValue.viewport;
+        f.entry->model->projectValue.viewport = polygon(true);
+        f.host.stateChange(f.entry, StateChange::Viewport);
+        f.host.drainFirstState(false);
+        QVERIFY(!f.control<QPushButton>("dataDownload")->isEnabled());
+        if (job)
+            QVERIFY(job->cancelled);
+        if (mode == 1) {
+            QVERIFY(reply);
+            QCOMPARE(reply->error(), QNetworkReply::OperationCanceledError);
+            QTRY_COMPARE(finished.size(), 1);
+            QVERIFY(qvariant_cast<OpenSWMM::Data::PayloadResult>(finished.first().first()).cancelled);
+        }
+        f.entry->model->projectValue.viewport = area;
+        f.host.stateChange(f.entry, StateChange::Viewport);
+        f.host.drain();
+        if (mode == 0)
+            job->complete();
+        else if (mode == 2) {
+            const auto status = f.control<QLabel>("dataStatus")->text();
+            TimeSeriesImportResult late;
+            late.layerId = "late-layer";
+            late.seriesCount = 1;
+            f.host.importFinished(late);
+            QCOMPARE(f.control<QLabel>("dataStatus")->text(), status);
+        }
+        f.select();
+        QVERIFY(!f.control<QPushButton>("dataDownload")->isEnabled());
+        QCOMPARE(f.host.activeProgress(), 0);
+    }
+    /** @brief Selection waits for harmless queued tab/presentation revisions and recovers after delivery. */
+    void queuedTabRevisionRestoresDownload_data()
+    {
+        QTest::addColumn<bool>("boundary");
+        QTest::newRow("viewport") << false;
+        QTest::newRow("polygon") << true;
+    }
+    void queuedTabRevisionRestoresDownload()
+    {
+        QFETCH(bool, boundary);
+        Fixture f;
+        if (boundary)
+            f.polygonMode();
+        QVERIFY(f.review());
+        f.select();
+        QVERIFY(f.control<QPushButton>("dataDownload")->isEnabled());
+        f.host.activate(nullptr);
+        f.host.stateChange(f.entry, StateChange::Layers);
+        f.host.viewChange(f.entry, ViewEventKind::LayerStyleChanged, f.attachment());
+        auto *table = f.control<QTableView>("dataCatalogue");
+        table->clearSelection();
+        f.select();
+        QCOMPARE(f.rows(), 1);
+        QVERIFY(f.hasOverlay());
+        QVERIFY(!f.control<QPushButton>("dataDownload")->isEnabled());
+        f.host.drain();
+        QTRY_VERIFY(f.control<QPushButton>("dataDownload")->isEnabled());
+        QVERIFY(f.control<QPushButton>("dataExport")->isEnabled());
+        f.host.activate(f.entry);
+        f.host.drain();
+        QVERIFY(f.control<QPushButton>("dataDownload")->isEnabled());
+    }
+    /** @brief Read-only selection never authorizes an undelivered replacement of the reviewed boundary source. */
+    void queuedSourceReplacementStillRevokesDownload()
+    {
+        Fixture f;
+        f.polygonMode();
+        QVERIFY(f.review());
+        f.host.viewChange(f.entry, ViewEventKind::LayerSourceChanged, f.attachment());
+        f.select();
+        QCOMPARE(f.rows(), 1);
+        QVERIFY(!f.control<QPushButton>("dataDownload")->isEnabled());
+        f.host.drain();
+        QCOMPARE(f.rows(), 0);
+        QVERIFY(!f.hasOverlay());
+        QVERIFY(!f.control<QPushButton>("dataDownload")->isEnabled());
     }
     /** @brief Equal selection counts do not hide replacement FIDs before deferred notification. */
     void sameCountSelectionCannotPublishStaleResult()

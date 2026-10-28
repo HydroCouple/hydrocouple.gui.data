@@ -179,6 +179,17 @@ between them never transfers a review. Focusing a utility document keeps the
 existing model context. Closing, failed loading or replacing that context stops
 pending work and clears its review.
 
+Returning from a utility tab preserves the same model's catalogue selection and
+download controls. A viewport notification with the same reviewed area and CRS
+does not replace the preview layer. A completed review also survives a transient
+tab-layout resize that restores its original area before revision reconciliation;
+write actions stay disabled during that transition. A settled change in area or
+CRS revokes the review and cannot later revive it without a fresh Preview.
+Selecting catalogue rows while an unchanged
+source has a queued revision temporarily disables write actions; qualified
+notification delivery restores them. A relevant source change still clears the
+review, even if its current geometry happens to match the earlier snapshot.
+
 | Native change | Current viewport review | Loaded polygon review |
 | --- | --- | --- |
 | View extent, canvas CRS or resize | Keep the completed display for inspection; revoke export authority | Keep when the chosen polygon is unchanged |

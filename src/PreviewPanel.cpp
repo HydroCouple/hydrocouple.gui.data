@@ -612,8 +612,12 @@ void PreviewPanel::bindProject()
     if (ready.sessionId.isNull())
         instance = nullptr;
     if (instance == mInstance && ready.sessionId == mSessionId &&
-        ready.loadGeneration == mLoadGeneration)
+        ready.loadGeneration == mLoadGeneration) {
+        // Utility/ribbon focus does not create a new review. Refresh controls
+        // from the retained state without redrawing or replacing its map layer.
+        setBusy(mBusy);
         return;
+    }
     invalidate();
     if (!self || !mHostLifetime)
         return;
@@ -896,7 +900,8 @@ void PreviewPanel::observeRevision(const Sdk::ModelSessionState &state)
             if (mOverlayRefreshPending) {
                 mOverlayRefreshPending = false;
                 updateOverlay();
-            }
+            } else
+                setBusy(mBusy);
         }
     });
 }
@@ -920,17 +925,36 @@ void PreviewPanel::stateChanged(const Sdk::StateEvent &event)
     if (event.sequence > mReview.sequence && event.kind == StateEventKind::StateChanged &&
         event.changes.testFlag(StateChange::Viewport)) {
         if (mAreaMode->currentIndex() == 0) {
-            invalidate(tr("The viewport changed. Showing the previous preview; "
-                          "preview again before saving features."),
-                       true);
-            return;
+            if (mValid && mHasDisplay && !mBusy && !mJob && !mImportPending &&
+                !(mPayload && mPayload->isRunning())) {
+                // Ribbon/dock layouts can resize and restore the canvas in one
+                // publication turn. Suspend completed-review writes immediately,
+                // then reconcile the final area with qualified revision evidence.
+                // A genuinely different final area still loses authority below.
+                mAwaitingDisplayRevision = true;
+                setBusy(mBusy);
+            } else {
+                const auto generation = mGeneration;
+                ReviewContext current;
+                const bool captured = mValid && captureContext(&current);
+                if (!self || generation != mGeneration)
+                    return;
+                const bool unchanged = captured && sameContent(mReview, current);
+                if (!unchanged) {
+                    invalidate(tr("The viewport changed. Showing the previous preview; "
+                                  "preview again before saving features."),
+                               true);
+                    return;
+                }
+            }
+        } else {
+            // The frozen polygon stays authoritative, but its transient graphics
+            // need reprojection after a canvas CRS change. The public viewport
+            // category also includes panning, so refresh once after safe rebasing.
+            mOverlayRefreshPending = mOverlayRefreshPending || mValid;
+            if (!mValid && mHasDisplay)
+                updateOverlay();
         }
-        // The frozen polygon stays authoritative, but its transient graphics
-        // need reprojection after a canvas CRS change. The public viewport
-        // category also includes panning, so refresh once after safe rebasing.
-        mOverlayRefreshPending = mOverlayRefreshPending || mValid;
-        if (!mValid && mHasDisplay)
-            updateOverlay();
         if (!self)
             return;
     }
@@ -1498,7 +1522,27 @@ void PreviewPanel::updateOverlay()
         mDownload->setEnabled(false);
         return;
     }
-    if (mValid && !validateReview())
+    bool reviewedSourceCurrent = false;
+    if (mValid) {
+        ReviewContext currentReview;
+        const bool captured = captureContext(&currentReview);
+        if (!self || generation != mGeneration)
+            return;
+        const bool unchanged = captured && sameContent(mReview, currentReview);
+        reviewedSourceCurrent = unchanged &&
+                                currentReview.stateRevision == mReview.stateRevision;
+        if (unchanged && !reviewedSourceCurrent) {
+            // Row selection is read-only. Keep the review while qualified
+            // source evidence is queued, but keep all write actions disabled.
+            // Relevant source notifications still invalidate it, including
+            // source changes whose copied geometry later happens to match.
+            mAwaitingDisplayRevision = true;
+            mOverlayRefreshPending = true;
+            setBusy(mBusy);
+            return;
+        }
+    }
+    if (mValid && !reviewedSourceCurrent && !validateReview())
         return;
     const auto visible = visibleItems();
     auto collection = featureCollection(visible);

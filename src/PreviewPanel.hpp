@@ -83,7 +83,8 @@ private:
         QJsonObject metadata;     ///< Available source/filter/CRS/eligibility values.
         QByteArray selectionHash; ///< Hash of every sorted selected FID, with bounded page storage.
     };
-    /** @brief Bind the actual Ready model context, retaining it while utility documents have focus. */
+    /** @brief Bind the actual Ready model context, retaining it while utility documents have focus.
+     * Same-session tab focus refreshes controls without replacing the preview layer. */
     void bindProject();
     /** @brief Refresh unambiguous polygon attachments, preserving their runtime identities. */
     void refreshLayers();
@@ -110,6 +111,9 @@ private:
      * @param[in] state Last delivered copied state for this exact session/generation. */
     void observeRevision(const Sdk::ModelSessionState &state);
     /** @brief Apply typed model lifecycle and viewport invalidations.
+     * Completed viewport reviews suspend writes until the publication turn's final
+     * coherent area is reconciled, so a transient tab resize cannot revoke them.
+     * Pending preview/download/import work still loses authority on an area mutation.
      * @param[in] event Deferred source-authoritative state transition. */
     void stateChanged(const Sdk::StateEvent &event);
     /** @brief Apply typed chosen-boundary invalidations and refresh choices.
@@ -131,7 +135,10 @@ private:
      * @param[in] items Complete exact-area filtered records.
      * @param[in] more True when the server advertises additional catalogue records. */
     void apply(const QList<Item> &items, bool more);
-    /** @brief Refresh transient geometry and export eligibility, awaiting qualified native layer revisions. */
+    /** @brief Refresh transient geometry and write eligibility, awaiting qualified native revisions.
+     * Read-only selection waits when the unchanged source has an undelivered revision;
+     * matching detailed evidence restores controls, while relevant source changes still
+     * discard authority. This wait never authorizes pending-source downloads or exports. */
     void updateOverlay();
     /** @brief Apply the local saved-property predicate without changing the service query. */
     void filterResults();
