@@ -175,9 +175,9 @@ model's map; saved files remain available if that model has closed.
 
 ## Typed review ownership and invalidation
 
-This package requires the installed GUI SDK **1.8**, its typed lifecycle,
+This package requires the installed GUI SDK **1.9**, its typed lifecycle,
 view/activity and native observation-import services, and its separately
-discoverable `IProgressV1` shared progress and `IPreviewLayersV1` preview-layer
+discoverable `IProgress` shared progress and `IPreviewLayers` preview-layer
 services. A review belongs to an exact Ready **open session**
 and load generation. Two open models may share a saved project UUID; switching
 between them never transfers a review. Focusing a utility document keeps the

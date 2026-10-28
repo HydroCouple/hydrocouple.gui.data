@@ -8,7 +8,7 @@
  */
 #pragma once
 #include <sdk/ExtensionHost.hpp>
-#include <sdk/IProgressV1.hpp>
+#include <sdk/IProgress.hpp>
 #include <QPointer>
 #include <utility>
 
@@ -42,7 +42,7 @@ public:
             return;
         if (mEpoch != epoch)
             return; // A newer reentrant operation already superseded this start.
-        if (auto *service = qobject_cast<Sdk::IProgressV1 *>(lifetime.data())) {
+        if (auto *service = qobject_cast<Sdk::IProgress *>(lifetime.data())) {
             const auto id = service->beginProgress(title, context);
             // Native Logs/status publication can synchronously delete the owning
             // context and this embedded wrapper. Only local guards survive it.
@@ -84,9 +84,9 @@ public:
     }
 private:
     /** @return Optional live shared progress service; null after host destruction. */
-    Sdk::IProgressV1 *progress() const
+    Sdk::IProgress *progress() const
     {
-        return mLifetime ? qobject_cast<Sdk::IProgressV1 *>(mLifetime.data()) : nullptr;
+        return mLifetime ? qobject_cast<Sdk::IProgress *>(mLifetime.data()) : nullptr;
     }
     Sdk::ExtensionHost *mHost; ///< Borrowed SDK facade, valid only while mLifetime survives.
     QPointer<QObject> mLifetime; ///< Host guard; workers never use this wrapper.

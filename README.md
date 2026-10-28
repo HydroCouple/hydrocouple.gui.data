@@ -1,7 +1,7 @@
 # OpenSWMM Data Sources
 
 An independently built native plugin for `openswmm.gui`, consuming the installed
-GUI SDK 1.8, matching Qt with Qt SVG, and GDAL. The SDK and plugin host remain in the GUI repo.
+GUI SDK 1.9, matching Qt with Qt SVG, and GDAL. The SDK and plugin host remain in the GUI repo.
 
 The source repository is [HydroCouple/hydrocouple.gui.data](https://github.com/HydroCouple/hydrocouple.gui.data).
 The plugin identity remains `openswmm.gui.data`; the hosted repository name does
@@ -59,7 +59,7 @@ describe the recorded catalogue response. The download controls choose the actua
 observation period and measurement; an empty response does not imply zero flow.
 Use **Details and advanced options** for the full saved-property table and filters.
 All new C++ interfaces and source files use Doxygen comments. The plugin requires
-SDK 1.8 typed lifecycle, view, UI activity, native time-series import, shared
+SDK 1.9 typed lifecycle, view, UI activity, native time-series import, shared
 progress and preview-layer services. Review ownership uses the
 per-open session and load generation, including when two models share a saved UUID.
 The guide distinguishes retained display from export authority and documents how

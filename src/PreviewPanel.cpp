@@ -390,16 +390,16 @@ PreviewPanel::PreviewPanel(Sdk::ExtensionHost *host, QWidget *parent)
         mStatus->setText(message);
     });
     updateControls();
-    mStateSource = qobject_cast<Sdk::IEventSourceV2 *>(mHostLifetime.data());
-    mViewSource = qobject_cast<Sdk::IEventSourceV3 *>(mHostLifetime.data());
-    mActivitySource = qobject_cast<Sdk::IEventSourceV4 *>(mHostLifetime.data());
-    mViewControls = qobject_cast<Sdk::IViewControlsV1 *>(mHostLifetime.data());
-    mTimeSeriesLayers = qobject_cast<Sdk::ITimeSeriesLayersV1 *>(mHostLifetime.data());
-    mPreviewLayers = qobject_cast<Sdk::IPreviewLayersV1 *>(mHostLifetime.data());
+    mStateSource = qobject_cast<Sdk::ISessionEvents *>(mHostLifetime.data());
+    mViewSource = qobject_cast<Sdk::IViewEvents *>(mHostLifetime.data());
+    mActivitySource = qobject_cast<Sdk::IActivityEvents *>(mHostLifetime.data());
+    mViewControls = qobject_cast<Sdk::IViewControls *>(mHostLifetime.data());
+    mTimeSeriesLayers = qobject_cast<Sdk::ITimeSeriesLayers *>(mHostLifetime.data());
+    mPreviewLayers = qobject_cast<Sdk::IPreviewLayers *>(mHostLifetime.data());
     if (!mStateSource || !mViewSource || !mActivitySource || !mViewControls || !mTimeSeriesLayers ||
-        !mPreviewLayers || !qobject_cast<Sdk::IProgressV1 *>(mHostLifetime.data())) {
+        !mPreviewLayers || !qobject_cast<Sdk::IProgress *>(mHostLifetime.data())) {
         mStatus->setText(tr(
-            "This Data panel requires the SDK 1.8 lifecycle, view, activity, preview-layer, time-series layer and progress services."));
+            "This Data panel requires the SDK 1.9 lifecycle, view, activity, preview-layer, time-series layer and progress services."));
         setBusy(false);
         return;
     }
@@ -965,7 +965,7 @@ void PreviewPanel::stateChanged(const Sdk::StateEvent &event)
         if (!self)
             return;
     }
-    // A broad V2 record can precede its same-revision V3 source invalidation.
+    // A broad ISessionEvents record can precede its same-revision IViewEvents source invalidation.
     // Another observer may enter a nested loop before that detailed event is
     // delivered, so broad model/layer evidence cannot authorize a rebase.
     if (event.kind == StateEventKind::StateChanged &&

@@ -13,12 +13,12 @@
 #include "PreviewPanel.hpp"
 #include "ProgressRecorder.hpp"
 #include "PayloadDownload.hpp"
-#include <sdk/IEventSourceV2.hpp>
-#include <sdk/IEventSourceV3.hpp>
-#include <sdk/IEventSourceV4.hpp>
-#include <sdk/IViewControlsV1.hpp>
-#include <sdk/IPreviewLayersV1.hpp>
-#include <sdk/ITimeSeriesLayersV1.hpp>
+#include <sdk/ISessionEvents.hpp>
+#include <sdk/IViewEvents.hpp>
+#include <sdk/IActivityEvents.hpp>
+#include <sdk/IViewControls.hpp>
+#include <sdk/IPreviewLayers.hpp>
+#include <sdk/ITimeSeriesLayers.hpp>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDir>
@@ -368,12 +368,12 @@ public:
 /** @brief Installed-SDK-only host whose authoritative mutations precede explicit notification delivery. */
 class Host final : public QObject,
                    public ExtensionHost,
-                   public IEventSourceV2,
-                   public IEventSourceV3,
-                   public IEventSourceV4,
-                   public IViewControlsV1,
-                   public IPreviewLayersV1,
-                   public ITimeSeriesLayersV1,
+                   public ISessionEvents,
+                   public IViewEvents,
+                   public IActivityEvents,
+                   public IViewControls,
+                   public IPreviewLayers,
+                   public ITimeSeriesLayers,
                    public ProgressRecorder,
                    public ISettings,
                    public IConsole,
@@ -381,9 +381,9 @@ class Host final : public QObject,
 {
     Q_OBJECT
     Q_INTERFACES(
-        OpenSWMM::Sdk::IEventSourceV2 OpenSWMM::Sdk::IEventSourceV3 OpenSWMM::Sdk::IEventSourceV4
-            OpenSWMM::Sdk::IViewControlsV1 OpenSWMM::Sdk::IPreviewLayersV1
-                OpenSWMM::Sdk::ITimeSeriesLayersV1 OpenSWMM::Sdk::IProgressV1)
+        OpenSWMM::Sdk::ISessionEvents OpenSWMM::Sdk::IViewEvents OpenSWMM::Sdk::IActivityEvents
+            OpenSWMM::Sdk::IViewControls OpenSWMM::Sdk::IPreviewLayers
+                OpenSWMM::Sdk::ITimeSeriesLayers OpenSWMM::Sdk::IProgress)
 public:
     /** @brief Bind the fake scoped progress capability to this host lifetime. */
     Host() : ProgressRecorder(this) {}
@@ -398,7 +398,7 @@ public:
     Entry *active = nullptr;  ///< Cached active model, retained while a utility view has focus.
     UiActivityState activity; ///< Actual document focus, separate from active model context.
     QUuid utilityDocumentId = QUuid::createUuid(); ///< Independent model-free attachment.
-    quint64 sequence = 10;                         ///< Shared V2/V3/V4 commit watermark.
+    quint64 sequence = 10;                         ///< Shared session/view/activity watermark.
     bool stopping = false;       ///< End source queries and future observation delivery.
     int legacySubscriptions = 0; ///< Migration must not use the string notification service.
     std::vector<std::unique_ptr<Job>> jobs; ///< Retained borrowed worker handles.
@@ -2292,7 +2292,8 @@ private slots:
         QVERIFY(f.hasOverlay());
         QVERIFY(!f.control<QPushButton>("dataExport")->isEnabled());
     }
-    /** @brief A broad V2 publication cannot rebase over its still-pending same-revision V3 source change. */
+    /** @brief A broad session publication cannot rebase over its still-pending
+     * same-revision IViewEvents source change. */
     void broadStateBeforeDetailedSourceCannotRebaseReview()
     {
         const auto sourceChangedButDetailsHeld = [](Fixture &f) {

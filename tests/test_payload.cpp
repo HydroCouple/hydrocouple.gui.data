@@ -146,7 +146,7 @@ public:
 class Host final : public QObject, public ExtensionHost, public ISettings, public ProgressRecorder
 {
     Q_OBJECT
-    Q_INTERFACES(OpenSWMM::Sdk::IProgressV1)
+    Q_INTERFACES(OpenSWMM::Sdk::IProgress)
 public:
     /** @brief Bind fake scoped progress to this host's QObject lifetime. */
     Host() : ProgressRecorder(this) {}

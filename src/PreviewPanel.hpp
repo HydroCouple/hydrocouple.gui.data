@@ -14,12 +14,12 @@
 #include "OperationProgress.hpp"
 #include <sdk/ExtensionHost.hpp>
 #include <sdk/IProject.hpp>
-#include <sdk/IEventSourceV2.hpp>
-#include <sdk/IEventSourceV3.hpp>
-#include <sdk/IEventSourceV4.hpp>
-#include <sdk/IViewControlsV1.hpp>
-#include <sdk/IPreviewLayersV1.hpp>
-#include <sdk/ITimeSeriesLayersV1.hpp>
+#include <sdk/ISessionEvents.hpp>
+#include <sdk/IViewEvents.hpp>
+#include <sdk/IActivityEvents.hpp>
+#include <sdk/IViewControls.hpp>
+#include <sdk/IPreviewLayers.hpp>
+#include <sdk/ITimeSeriesLayers.hpp>
 #include <QPointer>
 #include <QWidget>
 
@@ -189,12 +189,12 @@ private:
     Sdk::ExtensionHost *mHost;       ///< Borrowed host; use only while mHostLifetime survives.
     QPointer<QObject> mHostLifetime; ///< Guard against host destruction during queued/native calls.
     QPointer<QObject> mModelLifetime;               ///< Exact bound native model lifetime.
-    Sdk::IEventSourceV2 *mStateSource = nullptr;    ///< Borrowed Ready/session/revision source.
-    Sdk::IEventSourceV3 *mViewSource = nullptr;     ///< Borrowed runtime attachment source.
-    Sdk::IEventSourceV4 *mActivitySource = nullptr; ///< Borrowed actual document-focus source.
-    Sdk::IViewControlsV1 *mViewControls = nullptr;  ///< Borrowed paged selected-FID query.
-    Sdk::IPreviewLayersV1 *mPreviewLayers = nullptr; ///< Borrowed native preview attachment lookup.
-    Sdk::ITimeSeriesLayersV1 *mTimeSeriesLayers =
+    Sdk::ISessionEvents *mStateSource = nullptr;    ///< Borrowed Ready/session/revision source.
+    Sdk::IViewEvents *mViewSource = nullptr;     ///< Borrowed runtime attachment source.
+    Sdk::IActivityEvents *mActivitySource = nullptr; ///< Borrowed actual document-focus source.
+    Sdk::IViewControls *mViewControls = nullptr;  ///< Borrowed paged selected-FID query.
+    Sdk::IPreviewLayers *mPreviewLayers = nullptr; ///< Borrowed native preview attachment lookup.
+    Sdk::ITimeSeriesLayers *mTimeSeriesLayers =
         nullptr;                     ///< Borrowed native dataset import service.
     Sdk::IJob *mImportJob = nullptr; ///< Borrowed host-owned native preparation job.
     bool mImportPending =

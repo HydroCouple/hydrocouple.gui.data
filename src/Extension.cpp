@@ -47,16 +47,16 @@ public:
     bool initialize(ExtensionHost *host, QString *error) override
     {
         auto *lifetime = host ? host->lifetime() : nullptr;
-        if (!lifetime || !qobject_cast<IEventSourceV2 *>(lifetime) ||
-            !qobject_cast<IEventSourceV3 *>(lifetime) ||
-            !qobject_cast<IEventSourceV4 *>(lifetime) ||
-            !qobject_cast<IViewControlsV1 *>(lifetime) ||
-            !qobject_cast<ITimeSeriesLayersV1 *>(lifetime) ||
-            !qobject_cast<IProgressV1 *>(lifetime) ||
-            !qobject_cast<IPreviewLayersV1 *>(lifetime)) {
+        if (!lifetime || !qobject_cast<ISessionEvents *>(lifetime) ||
+            !qobject_cast<IViewEvents *>(lifetime) ||
+            !qobject_cast<IActivityEvents *>(lifetime) ||
+            !qobject_cast<IViewControls *>(lifetime) ||
+            !qobject_cast<ITimeSeriesLayers *>(lifetime) ||
+            !qobject_cast<IProgress *>(lifetime) ||
+            !qobject_cast<IPreviewLayers *>(lifetime)) {
             if (error)
                 *error = tr(
-                    "Data sources requires SDK 1.8 lifecycle, view, activity, selected-feature, preview-layer, time-series layer and progress services.");
+                    "Data sources requires SDK 1.9 lifecycle, view, activity, selected-feature, preview-layer, time-series layer and progress services.");
             return false;
         }
         mHost = host;

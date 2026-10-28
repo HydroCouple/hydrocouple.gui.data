@@ -7,7 +7,7 @@
  * @license GPL-3.0-or-later
  */
 #pragma once
-#include <sdk/IProgressV1.hpp>
+#include <sdk/IProgress.hpp>
 #include <QHash>
 #include <QPointer>
 #include <QStringList>
@@ -15,7 +15,7 @@
 #include <functional>
 
 /** @brief Capture shared progress and its stage-deduplicated lifecycle logs without native GUI internals. */
-class ProgressRecorder : public OpenSWMM::Sdk::IProgressV1
+class ProgressRecorder : public OpenSWMM::Sdk::IProgress
 {
 public:
     /** @brief Copied task evidence retained after completion. */
