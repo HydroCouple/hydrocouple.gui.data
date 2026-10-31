@@ -10,6 +10,8 @@
  */
 #include "PreviewPanel.hpp"
 #include "CommandIcons.hpp"
+#include "StormPanel.hpp"
+#include <sdk/IModelRainfall.hpp>
 #include <sdk/IToolbox.hpp>
 #include <sdk/IToolPreviews.hpp>
 #include <sdk/IToolRuns.hpp>
@@ -37,7 +39,7 @@ public:
     {
         return {"openswmm.gui.data",
                 "Data sources",
-                "Review monitoring sites and elevation footprints",
+                "Live NOAA rainfall, design storms, observations and elevation",
                 "0.1.0",
                 "OpenSWMM",
                 "https://github.com/HydroCouple/hydrocouple.gui.data",
@@ -61,19 +63,25 @@ public:
             !qobject_cast<IToolbox *>(lifetime) ||
             !qobject_cast<IToolPreviews *>(lifetime) ||
             !qobject_cast<IToolRuns *>(lifetime) ||
-            !qobject_cast<ISharedRibbon *>(lifetime)) {
+            !qobject_cast<ISharedRibbon *>(lifetime) ||
+            !qobject_cast<IModelRainfall *>(lifetime)) {
             if (error)
                 *error = tr(
-                    "Data sources requires SDK 1.11 toolbox, shared ribbon, tool previews, analysis runs, lifecycle, native layers and progress services.");
+                    "Data sources requires SDK 1.12 rainfall metadata, toolbox, shared ribbon, tool previews, analysis runs, lifecycle, native layers and progress services.");
             return false;
         }
         mHost = host;
         mSettings = host->settings();
         mRibbonPlacement = QStringLiteral("toolbox");
+        mStormWorkspace = new StormWorkspace(host, lifetime);
         auto *sites = new QAction(tr("USGS time series…"), host->lifetime());
         auto *terrain = new QAction(tr("Elevation raster…"), host->lifetime());
+        auto *precipitation = new QAction(tr("NOAA precipitation frequency…"), lifetime);
+        auto *designStorm = new QAction(tr("Design storm builder…"), lifetime);
         setCommandIcon(sites, CommandIcon::MonitoringSites);
         setCommandIcon(terrain, CommandIcon::ElevationFootprints);
+        setCommandIcon(precipitation, CommandIcon::PrecipitationFrequency);
+        setCommandIcon(designStorm, CommandIcon::DesignStorm);
         auto *toolbox = qobject_cast<IToolbox *>(lifetime);
         const ToolSpec gages{"sites", "sites", tr("Preview and download USGS observations"),
                              {{"download", tr("Download data")}},
@@ -81,8 +89,16 @@ public:
         const ToolSpec dem{"terrain", "terrain", tr("Preview and download elevation rasters"),
                            {{"download", tr("Download data")}},
                            {"download", "usgs", "elevation", "raster"}, tr("Data sources")};
+        const ToolSpec frequency{"precipitation", "precipitation", tr("Evaluate live NOAA Atlas 14 frequency curves"),
+                                 {{"precipitation", tr("Precipitation")}},
+                                 {"precipitation", "noaa", "frequency", "retrieval"}, tr("Data sources")};
+        const ToolSpec storm{"design-storm", "design-storm", tr("Compare design storms and apply rainfall to the model"),
+                             {{"precipitation", tr("Precipitation")}},
+                             {"precipitation", "design-storm", "time-series"}, tr("Data sources")};
         if (!host->ui()->registerAction("sites", sites) ||
             !host->ui()->registerAction("terrain", terrain) ||
+            !host->ui()->registerAction("precipitation", precipitation) ||
+            !host->ui()->registerAction("design-storm", designStorm) ||
             !toolbox->registerTool(gages, lifetime, [this](ExtensionHost *owner) {
                 mSitesPanel = new PreviewPanel(owner, Source::Sites, "sites");
                 return mSitesPanel.data();
@@ -90,6 +106,12 @@ public:
             !toolbox->registerTool(dem, lifetime, [this](ExtensionHost *owner) {
                 mTerrainPanel = new PreviewPanel(owner, Source::Terrain, "terrain");
                 return mTerrainPanel.data();
+            }, error) ||
+            !toolbox->registerTool(frequency, lifetime, [this](ExtensionHost *owner) {
+                return new StormPanel(owner, StormPanel::Role::Frequency, mStormWorkspace);
+            }, error) ||
+            !toolbox->registerTool(storm, lifetime, [this](ExtensionHost *owner) {
+                return new StormPanel(owner, StormPanel::Role::Design, mStormWorkspace);
             }, error) ||
             !host->ui()->registerPreferencesPage(this)) {
             if (error)
@@ -104,7 +126,7 @@ public:
             host->console()->append("warning", ribbonError);
         host->console()->append(
             "info",
-            tr("Data sources loaded. Preview an area, then select sites or tiles to download."));
+            tr("Data sources loaded. NOAA evaluation stays in memory; Apply creates the selected model rainfall. USGS and elevation previews remain independent."));
         return true;
     }
     /** @brief Abort pending previews and downloads before host-owned widgets are destroyed. */
@@ -114,6 +136,8 @@ public:
             mSitesPanel->cancel();
         if (mTerrainPanel)
             mTerrainPanel->cancel();
+        if (mStormWorkspace)
+            mStormWorkspace->clear();
         mHost = nullptr;
         mSettings = nullptr;
         mRibbonPlacement = QStringLiteral("toolbox");
@@ -144,7 +168,7 @@ public:
         mRibbonChoice->setCurrentIndex(mRibbonChoice->findData(mRibbonPlacement));
         form->addRow(tr("Ribbon placement"), mRibbonChoice);
         auto *ribbonNote = new QLabel(
-            tr("Ribbon changes apply immediately. Both tools are available in the Analysis Toolbox."),
+            tr("Ribbon changes apply immediately. All Data tools are available in the Analysis Toolbox."),
             page);
         ribbonNote->setWordWrap(true);
         form->addRow(ribbonNote);
@@ -205,10 +229,12 @@ private:
         bool mounted = true;
         if (placement == "shared")
             mounted = shared && shared->registerSharedRibbonTab(
-                {"data", "data", tr("Data"), {{tr("Download data"), {"sites", "terrain"}}}}, error);
+                {"data", "data", tr("Data"), {{tr("Precipitation"), {"precipitation", "design-storm"}},
+                                               {tr("Download data"), {"sites", "terrain"}}}}, error);
         else if (placement == "separate")
             mounted = mHost->ui()->registerRibbonTab(
-                {"data", tr("Data"), false, {{tr("Download data"), {"sites", "terrain"}}}});
+                {"data", tr("Data"), false, {{tr("Precipitation"), {"precipitation", "design-storm"}},
+                                            {tr("Download data"), {"sites", "terrain"}}}});
         if (!lifetime || !mHost)
             return false;
         if (!mounted) {
@@ -228,6 +254,7 @@ private:
     ISettings *mSettings = nullptr;
     QPointer<PreviewPanel> mSitesPanel; ///< Independent gage preview/download dock.
     QPointer<PreviewPanel> mTerrainPanel; ///< Independent terrain preview/download dock.
+    QPointer<StormWorkspace> mStormWorkspace; ///< Session-only NOAA data shared by the two precipitation tools.
     QPointer<QSpinBox> mLimit;
     QPointer<QComboBox> mRibbonChoice; ///< Dialog-owned staged ribbon placement.
     QString mRibbonPlacement = "toolbox"; ///< Currently mounted placement, independent of a live page.

@@ -4,5 +4,7 @@
   <qresource prefix="/openswmm/data/icons">
     <file alias="usgs-gage.svg">icons/usgs-gage.svg</file>
     <file alias="dem.svg">icons/dem.svg</file>
+    <file alias="precipitation.svg">icons/precipitation.svg</file>
+    <file alias="design-storm.svg">icons/design-storm.svg</file>
   </qresource>
 </RCC>

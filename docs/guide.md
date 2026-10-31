@@ -1,4 +1,54 @@
-# Data previews and downloads
+# Data tools: live rainfall evaluation, previews and downloads
+
+## Live NOAA Atlas 14 and design storms
+
+Expand **Data sources → Precipitation** in the Analysis Toolbox. **NOAA
+precipitation frequency…** and **Design storm builder…** each open their own dock,
+and share only the accepted in-memory NOAA response. They also appear in the
+Precipitation group when optional Data ribbon placement is enabled.
+
+Each rainfall tool separates its scrollable inputs from its chart/value tabs with
+a vertical splitter. Drag the horizontal divider to give either section more
+room. Expanding **NOAA query options** or **Apply selected storm to model** keeps
+the dock in place; scroll the inputs to reach the expanded controls. Switching
+chart tabs, resizing, floating or docking the panel retains the current live
+response and comparison candidates.
+
+1. Enter latitude/longitude or use an authored model gage with a known geographic
+   location. Choose PDS/AMS and display units, then **Fetch / Refresh NOAA**.
+2. Inspect the exact accepted coordinate/time, duration-by-frequency table and
+   DDF/IDF charts. Choose the estimate or its lower/upper uncertainty bound.
+3. In the storm builder, choose a qualified distribution and frequency or manual
+   total depth, duration and fixed recording interval. The interval must divide
+   the duration evenly. Select NOAA temporal region/area and **Fetch patterns**
+   when using that method; the product remains in memory.
+4. **Generate / compare** adds a candidate to the bounded comparison list. View
+   intensity, cumulative depth or normalized cumulative curves, and the sample
+   table. The selected candidate shows its total and method parameters. Custom
+   curves accept normalized cumulative-time/depth pairs; invalid curves are
+   refused. Changing an input requires generating a reviewed candidate again.
+5. Expand the model target controls. Review the selected candidate, model
+   wall-clock start, new series name and new/existing gage. **Apply to model…**
+   converts to the engine's verified rainfall units and creates/binds the series
+   in one undoable edit, with compact source/method metadata. Existing time-series
+   names are refused, so a new evaluation cannot silently replace forcing.
+
+Fetch and evaluation create no NOAA files, disk cache, persistent layer or model
+changes. Clear releases accepted response data and comparison candidates. A late
+or cancelled request cannot restore a cleared response. A failed new request
+never relabels an older response as current. Offline policy prevents a live fetch;
+there is no NOAA disk-cache fallback.
+
+Saving the model retains only the applied rainfall samples and compact citation/
+method details, so an already applied storm runs and reopens without NOAA access.
+Refreshing NOAA is a new evaluation and does not update model forcing by itself.
+Run History, Results/Messages, the status bar and native Logs report stages,
+start/finish time, duration and cancellation without storing raw response bodies.
+
+See [Rainfall methods and numerical reference](rainfall-methods.md) for the
+qualified curve families, source resolutions, interpolation and fitting rules.
+
+## USGS and elevation downloads
 
 Open a georeferenced model, click **Analysis Toolbox** on the **View** ribbon, and
 expand **Data sources → Download data**. Choose **USGS time series…** or
@@ -236,7 +286,7 @@ model's map; saved files remain available if that model has closed.
 
 ## Typed review ownership and invalidation
 
-This package requires the installed GUI SDK **1.11**, its typed lifecycle,
+This package requires the installed GUI SDK **1.12**, its typed lifecycle,
 view/activity and native observation-import services, and its separately
 discoverable `IToolbox`, `IToolRuns`, `IToolPreviews`, `ISharedRibbon`, `IProgress` and
 `IPreviewLayers` capabilities. Tool panels share provider-independent workflow

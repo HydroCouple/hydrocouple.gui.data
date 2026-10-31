@@ -14,10 +14,12 @@ class QAction;
 
 namespace OpenSWMM::Data
 {
-/** @brief Distinct, non-branded glyphs for the two metadata retrieval workflows. */
+/** @brief Distinct, non-branded glyphs for Data retrieval and rainfall tools. */
 enum class CommandIcon {
     MonitoringSites,    ///< Water-level staff and river waves identify monitoring locations.
-    ElevationFootprints ///< Mountain profile over raster cells identifies elevation products.
+    ElevationFootprints, ///< Mountain profile over raster cells identifies elevation products.
+    PrecipitationFrequency, ///< Rain cloud and frequency axes identify NOAA estimate retrieval.
+    DesignStorm ///< Hyetograph bars and cumulative curve identify generated rainfall.
 };
 /** @brief Render an embedded SVG using current application palette roles.
  * @param[in] kind Monitoring locations or elevation products.

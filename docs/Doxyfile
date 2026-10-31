@@ -11,7 +11,7 @@ CREATE_SUBDIRS_LEVEL = 8
 CASE_SENSE_NAMES = NO
 FULL_PATH_NAMES = YES
 STRIP_FROM_PATH = ..
-INPUT = ../README.md ../src guide.md ../AUTHORS.md ../CONTRIBUTING.md \
+INPUT = ../README.md ../src guide.md rainfall-methods.md ../AUTHORS.md ../CONTRIBUTING.md \
         ../SECURITY.md ../PRIVACY.md ../CODE_OF_CONDUCT.md ../CLA.md ../CCLA.md \
         ../CLA-SIGNATORIES.md ../CHANGELOG.md ../RELEASING.md
 FILE_PATTERNS = *.hpp *.cpp *.md

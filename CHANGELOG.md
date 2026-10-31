@@ -7,6 +7,8 @@ version, not evidence of a release tag.
 
 ## [Unreleased]
 
+- Add live NOAA Atlas 14 frequency evaluation and a Design Storm Builder with in-memory comparison curves and explicit model series/gage application; NOAA responses and candidates are not cached or saved locally.
+- Require GUI SDK 1.12 for verified native rainfall units and authored gage metadata; compact applied storm provenance participates in model undo/redo.
 - Require GUI SDK 1.11 and expose USGS and elevation as independent tagged Analysis Toolbox tools, with separate previews, dockable panels, timestamped run history, results and cancellation.
 - Make the Data ribbon optional: choose Toolbox only (default), a shared Data tab or a separate Data tab in extension preferences.
 - Freeze a viewport preview's area at Preview, as for polygons: panning, zooming, map resizes and canvas CRS changes no longer disable Download or export, or cancel pending work. Preview again to search a new view.

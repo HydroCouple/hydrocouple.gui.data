@@ -1,7 +1,7 @@
 # OpenSWMM Data Sources
 
 An independently built native plugin for `openswmm.gui`, consuming the installed
-GUI SDK 1.11, matching Qt with Qt SVG, and GDAL. The SDK and plugin host remain in the GUI repo.
+GUI SDK 1.12, matching Qt with Qt SVG, and GDAL. The SDK and plugin host remain in the GUI repo.
 
 The source repository is [HydroCouple/hydrocouple.gui.data](https://github.com/HydroCouple/hydrocouple.gui.data).
 The plugin identity remains `openswmm.gui.data`; the hosted repository name does
@@ -17,8 +17,18 @@ area, including holes and multipart polygons. The derived DEM is added to
 the map. Successful nonempty USGS downloads are automatically added as native
 Time Series layers. Right-click a series to plot it or choose **Use in model…**
 for an explicit prepared model copy; downloading never changes model forcing.
-Published layers continue working when the Data plugin is disabled. Design storms
-remain separate work.
+Published layers continue working when the Data plugin is disabled.
+
+**NOAA precipitation frequency…** and **Design storm builder…** are independent
+tools under **Data sources → Precipitation**. Fetch Atlas 14 point estimates and
+temporal patterns live, compare frequency, hyetograph and cumulative curves in
+memory, and explicitly apply a selected storm to a model. NOAA responses and
+candidates are never written to a local cache or source folder. Apply creates the
+selected model time series, rain-gage binding and compact source/method metadata
+in one undoable transaction; ordinary project saving retains that chosen storm.
+Evaluation does not require creating a layer or choosing a destination folder.
+The [rainfall method reference](docs/rainfall-methods.md) lists the fourteen
+qualified choices and their published numerical definitions.
 
 **Clear preview** removes the temporary site layer or elevation footprints and
 catalogue rows, including a preview still being fetched. Saved downloads and
@@ -51,7 +61,7 @@ Ribbon placement is optional. In **Preferences → Extensions — Data sources �
 **Toolbox only** (the default), **Shared Data tab**, or **Separate Data tab** and apply
 the preference. The shared tab can contain command groups from several plugins.
 Changing placement applies immediately and keeps the tool panels and previews available.
-The toolbox's graphical **Tags** checklist filters tools. Both have **Download** and
+The toolbox's graphical **Tags** checklist filters tools. USGS and DEM have **Download** and
 **USGS** tags; **Time series** narrows to gages, and **Raster** narrows to elevation.
 All selected tags must match. Opening from the tree, ribbon or command palette
 raises the same tool panel. Both previews can coexist. Clearing or hiding one

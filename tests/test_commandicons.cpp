@@ -77,7 +77,10 @@ private slots:
         QApplication::setPalette(palette);
         QVERIFY(QFile::exists(":/openswmm/data/icons/usgs-gage.svg"));
         QVERIFY(QFile::exists(":/openswmm/data/icons/dem.svg"));
-        for (const auto kind : {CommandIcon::MonitoringSites, CommandIcon::ElevationFootprints}) {
+        QVERIFY(QFile::exists(":/openswmm/data/icons/precipitation.svg"));
+        QVERIFY(QFile::exists(":/openswmm/data/icons/design-storm.svg"));
+        for (const auto kind : {CommandIcon::MonitoringSites, CommandIcon::ElevationFootprints,
+                                CommandIcon::PrecipitationFrequency, CommandIcon::DesignStorm}) {
             const auto icon = commandIcon(kind);
             QVERIFY(!icon.isNull());
             for (const int edge : {16, 24, 32, 48, 64})

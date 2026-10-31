@@ -62,9 +62,13 @@ private:
 }
 QIcon commandIcon(CommandIcon kind)
 {
-    const auto path = kind == CommandIcon::MonitoringSites
-                          ? QStringLiteral(":/openswmm/data/icons/usgs-gage.svg")
-                          : QStringLiteral(":/openswmm/data/icons/dem.svg");
+    QString path;
+    switch (kind) {
+    case CommandIcon::MonitoringSites: path = ":/openswmm/data/icons/usgs-gage.svg"; break;
+    case CommandIcon::ElevationFootprints: path = ":/openswmm/data/icons/dem.svg"; break;
+    case CommandIcon::PrecipitationFrequency: path = ":/openswmm/data/icons/precipitation.svg"; break;
+    case CommandIcon::DesignStorm: path = ":/openswmm/data/icons/design-storm.svg"; break;
+    }
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly))
         return {};
