@@ -9,6 +9,7 @@
 #pragma once
 #include <sdk/ExtensionHost.hpp>
 #include <sdk/IProgress.hpp>
+#include <sdk/IToolRuns.hpp>
 #include <QPointer>
 #include <utility>
 
@@ -34,6 +35,9 @@ public:
      * @param[in] title User-facing operation caption. */
     void begin(const QString &title)
     {
+        if (!mParentRun.isNull())
+            return; // The panel owns settlement across download and native import.
+
         const auto context = mContext;
         const auto lifetime = mLifetime;
         const auto epoch = mEpoch + 1;
@@ -42,6 +46,18 @@ public:
             return;
         if (mEpoch != epoch)
             return; // A newer reentrant operation already superseded this start.
+        if (!mRequest.toolId.isEmpty()) {
+            if (auto *service = runs()) {
+                auto request = mRequest;
+                request.title = title;
+                const auto id = service->beginToolRun(request, context, mCancel);
+                if (context && lifetime && mEpoch == epoch)
+                    mId = id;
+                else if (context && lifetime && !id.isNull())
+                    service->finishToolRun(id, Sdk::ToolRunOutcome::Cancelled);
+            }
+            return;
+        }
         if (auto *service = qobject_cast<Sdk::IProgress *>(lifetime.data())) {
             const auto id = service->beginProgress(title, context);
             // Native Logs/status publication can synchronously delete the owning
@@ -60,7 +76,10 @@ public:
      * @param[in] stage Plain operation phase; repeated phases are deduplicated by the host. */
     void update(double fraction, const QString &stage)
     {
-        if (auto *service = progress(); service && !mId.isNull())
+        const auto run = toolRunId();
+        if (auto *service = runs(); service && !run.isNull())
+            service->updateToolRun(run, fraction, stage);
+        else if (auto *service = progress(); service && !mId.isNull())
             service->updateProgress(mId, fraction, stage);
     }
     /** @brief Close this task exactly once; host shutdown may already have closed it.
@@ -68,9 +87,19 @@ public:
      * @param[in] detail Final user-facing result or diagnostic. */
     void finish(Sdk::ProgressOutcome outcome, const QString &detail = {})
     {
+        if (!mParentRun.isNull())
+            return;
         ++mEpoch;
         const auto id = std::exchange(mId, QUuid{});
-        if (auto *service = progress(); service && !id.isNull())
+        if (!mRequest.toolId.isEmpty()) {
+            if (auto *service = runs(); service && !id.isNull())
+                service->finishToolRun(id, outcome == Sdk::ProgressOutcome::Succeeded
+                                              ? Sdk::ToolRunOutcome::Succeeded
+                                          : outcome == Sdk::ProgressOutcome::Cancelled
+                                              ? Sdk::ToolRunOutcome::Cancelled
+                                              : Sdk::ToolRunOutcome::Failed,
+                                       detail);
+        } else if (auto *service = progress(); service && !id.isNull())
             service->finishProgress(id, outcome, detail);
     }
     /** @brief Record an operation event that does not require an active progress token.
@@ -78,11 +107,53 @@ public:
      * @param[in] message Plain context and result; never credentials or request headers. */
     void log(const QString &level, const QString &message) const
     {
-        if (mLifetime && mHost)
+        const auto run = toolRunId();
+        if (auto *service = runs(); service && !run.isNull())
+            service->appendToolMessage(run, level, message);
+        else if (mLifetime && mHost)
             if (auto *console = mHost->console())
                 console->append(level, message);
     }
+    /** @brief Configure future independent runs with reviewed context and cancellation.
+     * @param[in] request Registered tool identity and exact reviewed session/generation.
+     * @param[in] cancel Short GUI-thread controller for this panel's active work. */
+    void configureToolRun(const Sdk::ToolRunRequest &request, std::function<void()> cancel)
+    {
+        mRequest = request;
+        mCancel = std::move(cancel);
+    }
+    /** @brief Report a stage of a parent run; its controller owns final settlement.
+     * @param[in] id Host-issued parent execution, or null for legacy progress. */
+    void attachToolRun(const QUuid &id) { mParentRun = id; }
+    /** @return Current parent/owned tool run, or null for legacy progress. */
+    QUuid toolRunId() const { return mParentRun.isNull() && !mRequest.toolId.isEmpty() ? mId : mParentRun; }
+    /** @brief Publish a small result before settling an owned preview run.
+     * @param[in] result Copied value or completed asset reference. */
+    void addResult(const Sdk::ToolResult &result)
+    {
+        if (auto *service = runs(); service && !toolRunId().isNull())
+            service->addToolResult(toolRunId(), result);
+    }
+    /** @brief Submit a child worker under the parent before its first event.
+     * @param[in] title User-facing stage caption.
+     * @param[in] work Data-only cancellable worker callback.
+     * @param[in] finished Optional GUI-thread completion receiver.
+     * @return Borrowed cancellable host job, or null for an unavailable host/run. */
+    Sdk::IJob *runJob(const QString &title, std::function<void(Sdk::IJobContext &)> work,
+                     std::function<void(bool, const QString &)> finished = {})
+    {
+        if (!mLifetime || !mHost)
+            return nullptr;
+        if (auto *service = runs(); service && !toolRunId().isNull())
+            return service->runToolJob(toolRunId(), title, std::move(work), std::move(finished));
+        return mHost->runJob(title, std::move(work), std::move(finished));
+    }
 private:
+    /** @return Optional live tool service, scoped by the borrowed host. */
+    Sdk::IToolRuns *runs() const
+    {
+        return mLifetime ? qobject_cast<Sdk::IToolRuns *>(mLifetime.data()) : nullptr;
+    }
     /** @return Optional live shared progress service; null after host destruction. */
     Sdk::IProgress *progress() const
     {
@@ -91,7 +162,10 @@ private:
     Sdk::ExtensionHost *mHost; ///< Borrowed SDK facade, valid only while mLifetime survives.
     QPointer<QObject> mLifetime; ///< Host guard; workers never use this wrapper.
     QPointer<QObject> mContext; ///< Caller lifetime used by the host to cancel orphaned tasks.
-    QUuid mId; ///< Current opaque token; null after terminal publication.
+    QUuid mId; ///< Current opaque progress/owned run token; null after settlement.
+    QUuid mParentRun; ///< Externally settled execution spanning payload and import.
+    Sdk::ToolRunRequest mRequest; ///< Context copied at preview acceptance.
+    std::function<void()> mCancel; ///< Guarded by the context supplied to the host.
     quint64 mEpoch = 0; ///< Cancellation/replacement intent, including calls before begin returns a token.
 };
 }

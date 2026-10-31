@@ -125,6 +125,61 @@ private slots:
         QVERIFY(parseCatalogue(Source::Terrain, response, boundary(), {}, &error).isEmpty());
         QVERIFY(error.contains("Unknown dataset"));
     }
+    /** @brief Record periods use one official metadata query and the union of matching rows. */
+    void recordPeriodsUseTheUnionOfMatchingRows()
+    {
+        const auto url = recordPeriodUrl({"USGS-01638500", "USGS-01646500"}, "00060", true);
+        QCOMPARE(url.scheme(), "https");
+        QCOMPARE(url.host(), "api.waterdata.usgs.gov");
+        QCOMPARE(url.path(), "/ogcapi/v1/collections/time-series-metadata/items");
+        const QUrlQuery query(url);
+        QCOMPARE(query.queryItemValue("monitoring_location_id"), "USGS-01638500,USGS-01646500");
+        QCOMPARE(query.queryItemValue("parameter_code"), "00060");
+        QCOMPARE(query.queryItemValue("computation_period_identifier"), "Daily");
+        QCOMPARE(QUrlQuery(recordPeriodUrl({"USGS-1"}, "00065", false))
+                     .queryItemValue("computation_period_identifier"),
+                 "Points");
+        const auto row = [](const QString &site, const QString &parameter, const QString &interval,
+                            const QJsonValue &begin, const QJsonValue &end) {
+            return QJsonObject{{"type", "Feature"},
+                               {"properties", QJsonObject{{"monitoring_location_id", site},
+                                                          {"parameter_code", parameter},
+                                                          {"computation_period_identifier", interval},
+                                                          {"begin", begin},
+                                                          {"end", end}}}};
+        };
+        const auto page = [](const QJsonArray &features) {
+            return QJsonObject{{"type", "FeatureCollection"}, {"features", features}};
+        };
+        // Shapes as published on 2026-10-28; other parameters, intervals and open rows are ignored.
+        RecordPeriod period;
+        QVERIFY(mergeRecordPeriod(
+            page({row("USGS-01646500", "00060", "Daily", "1930-03-01T05:00:00+00:00",
+                      "2026-10-27T04:00:00+00:00"),
+                  row("USGS-01638500", "00060", "Daily", "1895-02-01T05:00:00+00:00",
+                      "2026-10-27T04:00:00+00:00"),
+                  row("USGS-01638500", "00060", "Points", "1972-05-24T05:00:00+00:00",
+                      "2026-10-28T04:55:00+00:00"),
+                  row("USGS-01650000", "00065", "Daily", "1800-01-01T05:00:00+00:00",
+                      "2030-01-01T05:00:00+00:00"),
+                  row("USGS-01660000", "00060", "Daily", "2001-01-01T05:00:00+00:00", {})}),
+            "00060", true, &period));
+        QCOMPARE(period.begin, QDate(1895, 2, 1));
+        QCOMPARE(period.end, QDate(2026, 10, 27));
+        QCOMPARE(period.sites, (QStringList{"USGS-01638500", "USGS-01646500"}));
+        // A later page extends the union; a western site's local midnight keeps its UTC day.
+        QVERIFY(mergeRecordPeriod(page({row("USGS-11000000", "00060", "Daily",
+                                            "1890-06-01T08:00:00+00:00",
+                                            "2026-10-27T07:00:00+00:00")}),
+                                  "00060", true, &period));
+        QCOMPARE(period.begin, QDate(1890, 6, 1));
+        QCOMPARE(period.end, QDate(2026, 10, 27));
+        QCOMPARE(period.sites.size(), 3);
+        QString error;
+        QVERIFY(!mergeRecordPeriod(QJsonObject{{"type", "Feature"}}, "00060", true, &period, &error));
+        QVERIFY(!error.isEmpty());
+        QCOMPARE(period.sites.size(), 3);
+    }
 };
 QTEST_GUILESS_MAIN(CatalogTest)
 #include "test_catalog.moc"

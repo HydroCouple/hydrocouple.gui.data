@@ -10,9 +10,11 @@
  * @license GPL-3.0-or-later
  */
 #pragma once
+#include <QDate>
 #include <QJsonObject>
 #include <QList>
 #include <QRectF>
+#include <QStringList>
 #include <QUrl>
 #include <functional>
 
@@ -59,4 +61,25 @@ QList<Item> parseCatalogue(Source source, const QJsonObject &document, const QJs
  * @param[in] items Owning site/product metadata in desired display order.
  * @return WGS84 GeoJSON FeatureCollection retaining stable IDs and original properties. */
 QJsonObject featureCollection(const QList<Item> &items);
+/** @brief Union of the published USGS records of several locations for one measurement. */
+struct RecordPeriod {
+    QDate begin;       ///< Earliest first UTC date among matching records; invalid with none.
+    QDate end;         ///< Latest last UTC date among matching records.
+    QStringList sites; ///< Sorted location IDs that have a matching record.
+};
+/** @brief Build an official request for the published record periods of USGS locations.
+ * @param[in] siteIds Monitoring-location IDs; callers send at most 50 per request.
+ * @param[in] parameterCode Five-digit USGS parameter code.
+ * @param[in] daily Daily values (`Daily`) rather than continuous measurements (`Points`).
+ * @return HTTPS time-series-metadata query; it requests metadata only. */
+QUrl recordPeriodUrl(const QStringList &siteIds, const QString &parameterCode, bool daily);
+/** @brief Merge one time-series-metadata page into a union of record periods.
+ * @param[in] document Parsed response page.
+ * @param[in] parameterCode Only rows for this parameter count.
+ * @param[in] daily Only `Daily` rows count when true, only `Points` rows otherwise.
+ * @param[in,out] period Accumulated union; rows without a valid begin and end are skipped.
+ * @param[out] error Optional malformed-response detail.
+ * @return False when the page is not a feature collection; @p period is then unchanged. */
+bool mergeRecordPeriod(const QJsonObject &document, const QString &parameterCode, bool daily,
+                       RecordPeriod *period, QString *error = nullptr);
 }

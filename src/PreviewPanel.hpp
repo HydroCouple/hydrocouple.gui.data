@@ -19,6 +19,8 @@
 #include <sdk/IActivityEvents.hpp>
 #include <sdk/IViewControls.hpp>
 #include <sdk/IPreviewLayers.hpp>
+#include <sdk/IToolPreviews.hpp>
+#include <sdk/IToolRuns.hpp>
 #include <sdk/ITimeSeriesLayers.hpp>
 #include <QPointer>
 #include <QWidget>
@@ -32,6 +34,7 @@ class QStandardItemModel;
 class QNetworkReply;
 class QLineEdit;
 class QDateEdit;
+class QTimer;
 
 namespace OpenSWMM::Data
 {
@@ -47,6 +50,13 @@ public:
      * @param[in] host Borrowed initialized extension host, outliving this widget.
      * @param[in] parent Optional owning QWidget. */
     explicit PreviewPanel(Sdk::ExtensionHost *host, QWidget *parent = nullptr);
+    /** @brief Construct a fixed-provider tool with independent preview/run ownership.
+     * @param[in] host Borrowed initialized SDK 1.11 host.
+     * @param[in] source Fixed catalogue provider for this tool.
+     * @param[in] toolId Registered local tool identity.
+     * @param[in] parent Optional widget owner. */
+    PreviewPanel(Sdk::ExtensionHost *host, Source source, QString toolId,
+                 QWidget *parent = nullptr);
     /** @brief Cancel pending requests/jobs and remove this plugin's transient overlay. */
     ~PreviewPanel() override;
     /** @brief Select a catalogue adapter from a ribbon command.
@@ -96,6 +106,8 @@ private:
      * @param[in] retainDisplay Keep an adopted catalogue for inspection, without export authority. */
     void invalidate(const QString &message = {}, bool retainDisplay = false);
     /** @brief Capture a coherent current source stamp without granting historical authority.
+     * An adopted viewport review keeps the area frozen at Preview; only a new
+     * Preview reads the current viewport.
      * @param[out] context Exact owning current source values.
      * @param[out] error Optional unavailable/ambiguous/stale-context detail.
      * @return True only for a coherent Ready source and eligible chosen boundary. */
@@ -112,9 +124,8 @@ private:
      * @param[in] state Last delivered copied state for this exact session/generation. */
     void observeRevision(const Sdk::ModelSessionState &state);
     /** @brief Apply typed model lifecycle and viewport invalidations.
-     * Completed viewport reviews suspend writes until the publication turn's final
-     * coherent area is reconciled, so a transient tab resize cannot revoke them.
-     * Pending preview/download/import work still loses authority on an area mutation.
+     * Viewport changes keep the area frozen at Preview in both area modes and do
+     * not cancel work; they only refresh transient graphics after safe rebasing.
      * @param[in] event Deferred source-authoritative state transition. */
     void stateChanged(const Sdk::StateEvent &event);
     /** @brief Apply typed chosen-boundary invalidations and refresh choices.
@@ -184,6 +195,49 @@ private:
     /** @brief Refresh control availability without granting new source authority.
      * @param[in] busy Preview retrieval/parsing is pending; active payload work also keeps controls busy. */
     void setBusy(bool busy);
+    /** @brief Read the chosen USGS parameter code.
+     * @return Five-digit code, or empty for invalid text. */
+    QString parameterCode() const;
+    /** @brief Remove date limits and restart the debounced lookup of the selected
+     * sites' published record for the chosen measurement and interval.
+     * @note Advisory only: the lookup never gates Download. */
+    void schedulePeriodLookup();
+    /** @brief Request one record-period page, then the next page or site chunk.
+     * @param[in] url Policy-controlled HTTPS time-series-metadata query.
+     * @param[in] code Parameter code captured when the lookup started.
+     * @param[in] daily Interval captured when the lookup started.
+     * @param[in] remaining Site-ID chunks still to query.
+     * @param[in] period Union accumulated from earlier pages.
+     * @param[in] pages Pages already received, bounded to 20.
+     * @param[in] selected Selected site count reported with the result. */
+    void requestPeriod(const QUrl &url, const QString &code, bool daily,
+                       QList<QStringList> remaining, RecordPeriod period, int pages, int selected);
+    /** @brief Limit both dates to the record union and pull the chosen period inside it.
+     * @param[in] period Complete union for the selected sites.
+     * @param[in] selected Selected site count.
+     * @note Without overlap, shows the last 30 days of the published record. */
+    void applyPeriod(const RecordPeriod &period, int selected);
+    /** @brief Remove date limits, keeping the chosen dates.
+     * @param[in] note Explanation shown below the period, possibly empty. */
+    void clearPeriodLimits(const QString &note = {});
+    /** @brief Clear only this panel's named preview, falling back for legacy consumers. */
+    void clearOwnedPreview();
+    /** @brief Resolve exact attachment/FIDs for this panel's independent preview.
+     * @param[out] fids Optional source-order native feature IDs, emptied when unavailable.
+     * @return Runtime native attachment for only this tool, or null. */
+    QUuid previewAttachment(QList<qint64> *fids = nullptr) const;
+    /** @brief Settle the current download after any native import.
+     * @param[in] outcome Actual terminal outcome after active work settles.
+     * @param[in] message Plain final user-facing detail. */
+    void finishDownloadRun(Sdk::ToolRunOutcome outcome, const QString &message);
+    /** @brief Publish a copied output while the download run remains active.
+     * @param[in] result Completed local file, actual layer attachment or small value. */
+    void addDownloadResult(const Sdk::ToolResult &result);
+    QString mToolId; ///< Empty only for the legacy combined-panel constructor.
+    Sdk::IToolPreviews *mToolPreviews = nullptr; ///< Borrowed owner-scoped preview service.
+    Sdk::IToolRuns *mToolRuns = nullptr; ///< Borrowed owner-scoped execution service.
+    QUuid mDownloadRun; ///< Parent spanning payload and native import stages.
+    bool mImportCancelRequested = false; ///< Parent waits for the cancelled import callback.
     OperationProgress mPreviewProgress; ///< Enclosing metadata request/cache/parse progress.
     OperationProgress mImportProgress; ///< Native publication progress independent of downloaded files.
     Sdk::ExtensionHost *mHost;       ///< Borrowed host; use only while mHostLifetime survives.
@@ -236,6 +290,10 @@ private:
     QDateEdit *mEndDate;        ///< Inclusive last calendar date of the observation request.
     QComboBox *mInterval;       ///< Continuous measurements or daily observations.
     QComboBox *mParameter;      ///< USGS five-digit parameter code with familiar names.
+    QLabel *mRecordPeriod;      ///< Published record of the selected sites, or why it is unknown.
+    QTimer *mPeriodTimer;       ///< Debounces record lookups after selection/measurement edits.
+    QPointer<QNetworkReply> mPeriodReply; ///< Active record-period metadata reply.
+    quint64 mPeriodGeneration = 0;        ///< Discards late record pages after another edit.
     QTableView *mTable;         ///< Catalogue selection/sorting view.
     QStandardItemModel *mModel; ///< Complete currently reviewed catalogue records.
     CatalogueFilter *mFilter;   ///< Local saved-property predicate over stable source rows.

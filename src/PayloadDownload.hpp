@@ -66,6 +66,10 @@ public:
      * bounded pagination. Terrain requests require provenance.area as a valid WGS84 polygon;
      * selected original tiles are retained and a cropped/masked Float32 GeoTIFF is derived from it. */
     bool start(const PayloadRequest &request, QString *error = nullptr);
+    /** @brief Attribute the next transfer and its worker stages to an existing tool run.
+     * @param[in] id Parent accepted by this host; the caller settles it after import.
+     * @note Call while idle, before start(). A null UUID uses legacy progress. */
+    void setToolRun(const QUuid &id);
     /** @brief Request immediate transfer abort and cooperative worker cancellation; completed files are retained. */
     void cancel();
     /** @return True during a transfer, validation job or pending terminal signal delivery. */

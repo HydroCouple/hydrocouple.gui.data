@@ -1,8 +1,14 @@
 # Data previews and downloads
 
-Open a georeferenced model, then open the **Data** ribbon and choose
-**USGS time series…** or **Elevation raster…**. Each extension can register its own
-ribbon tabs; Data uses one named tab. A
+Open a georeferenced model, click **Analysis Toolbox** on the **View** ribbon, and
+expand **Data sources → Download data**. Choose **USGS time series…** or
+**Elevation raster…** to open that tool's dockable panel. The command palette also
+provides both commands.
+
+The Data plugin starts with **Toolbox only** ribbon placement. Open **Preferences → Extensions — Data sources → Ribbon placement** to choose **Shared Data tab** or **Separate Data tab**.
+The shared tab hosts command groups from multiple plugins. Apply changes to update
+the ribbon immediately. Each panel can float or dock beside Layers. Reopening a
+tool raises its existing panel with its current inputs, preview and work. A
 monitoring-gage icon identifies USGS sites; an elevation/raster icon identifies
 DEM product footprints. Both icons adapt to the application palette and menu or
 ribbon scale. They are generic workflow symbols, rather than agency logos.
@@ -22,7 +28,8 @@ ribbon scale. They are generic workflow symbols, rather than agency logos.
    sites or tiles. Open **Details and advanced options** when you need property-specific
    comparisons, the complete saved-attribute table, cached responses or metadata export.
 6. For USGS, choose the measurement, daily or continuous values, and the inclusive
-   start/end dates. Choose **Download selected observations…** and an output folder.
+   start/end dates. The dates are limited to the selected sites' published record.
+   Choose **Download selected observations…** and an output folder.
 7. For terrain, choose **Download selected raster tiles…** and an output folder.
    The plugin downloads the selected source GeoTIFFs, then creates a mosaic cropped
    and masked to the reviewed area, preserving polygon holes and multiple parts.
@@ -43,11 +50,16 @@ query, actual response origin and original properties. It does not download obse
 or elevation pixels. Only selected rows still visible in the filter are used by
 metadata exports and payload downloads.
 
-Changing the chosen area controls or catalogue source clears the review. Moving
-the viewport after a completed viewport preview keeps the previous dots and
-attributes available for inspection, while disabling feature export. Preview the
-new area before saving. The feature export uses the frozen reviewed geometry and
-selected IDs.
+Each panel has a fixed provider and its own preview, selection, date controls,
+cancellation and active run. Clearing DEM footprints preserves the gage preview
+and selected gages; clearing gages preserves DEM footprints. Closing a tool panel
+hides it while active work continues. Use **Cancel** to request cancellation.
+
+Changing the chosen area controls clears that tool's review. The area
+is frozen when you choose **Preview**: panning, zooming, resizing the map or
+changing its CRS afterwards keeps the rows, their map selection, **Download** and
+feature export. Preview again to search the new view. The feature export uses the
+frozen reviewed geometry and selected IDs.
 
 ## Temporary preview feature layer
 
@@ -73,9 +85,21 @@ USGS preview-layer updates remain observable through the GUI's usual layer event
 The Data dock briefly disables its save and download actions while the update's
 detailed source notifications are reconciled; a row-driven map selection is such
 an update. Publishing a temporary layer does not itself grant
-authority to save under a changed area or boundary. Compatible older hosts may
-show the catalogue geometry as an overlay instead of exposing the native feature
-layer. Elevation footprints continue to use the geometry preview in this package.
+authority to save under a changed area or boundary. Both USGS points and elevation
+footprints use independent native temporary feature layers with separate runtime
+attachment identities.
+
+## Finding tools with tags
+
+Use the toolbox's search field to search tool names, descriptions, folder paths
+and tags. Open **Tags** and check one or more tags to filter the tree graphically.
+Selected tags appear as removable chips. Each extra checked tag narrows the
+results; **Clear filters** restores the complete tool tree.
+
+Both Data tools have **Download** and **USGS** tags. The observation tool also has
+**Streamgages** and **Time series**, while elevation has **Elevation** and **Raster**.
+These tool filters choose a workflow. The catalogue filters inside each workflow
+choose returned locations or footprints for preview and download.
 
 ## Inspecting and filtering saved attributes
 
@@ -96,8 +120,9 @@ Nested arrays and objects are shown as JSON and can be searched as plain text.
 Text is not interpreted as a regular expression or executable expression. Filters
 operate only on the already returned, exact-area catalogue records: they neither
 fetch additional locations nor change the reviewed query. Filtering is also
-available on a retained, stale viewport preview, but cannot restore its permission
-to export. A fresh preview must establish that permission again.
+available on a retained viewport preview that lost its authority, for example to a
+pending model change, but cannot restore its permission to export. A fresh preview
+must establish that permission again.
 
 ## Observation files and download period
 
@@ -106,6 +131,16 @@ continuous collections, a selected monitoring-location identity and the selected
 five-digit parameter code. Daily dates and continuous timestamps, including their
 original UTC offsets, are preserved in output. Daily values may include several
 statistic IDs; their IDs and time-series IDs distinguish those observations.
+
+Selecting sites looks up their published record for the chosen measurement and
+daily or continuous values (USGS `time-series-metadata`). Both dates are then
+limited to the union of the records: the earliest first day to the latest last day
+among the selected sites, in UTC days like the requests. A chosen period is pulled
+inside that range; one entirely outside it becomes the record's last 30 days. The
+note below the dates names the range and how many selected sites have a record.
+Changing the selection, measurement or interval removes the limits until the new
+lookup completes. The lookup is advisory: if it fails, or more than 500 sites are
+selected, the dates stay unlimited, and Download never waits for it.
 
 A fresh subfolder is created for each transfer; existing files are never overwritten.
 Observation CSV files retain values, units, qualifiers, approval status, location,
@@ -158,6 +193,32 @@ the original model is no longer available for import. Cancelling or clearing one
 operation does not erase another operation's status. Use the Data dock's
 **Cancel** control for pending Data work.
 
+## Analysis results and messages
+
+Expand **Results and messages** in a tool panel, then choose the **Results** or
+**Messages** tab to review its latest execution or choose an earlier run. The toolbox's **History** tab lists runs across tools.
+Each entry shows its action, start timestamp, end timestamp after settlement,
+elapsed time, current stage or outcome, and reviewed input summary. The parent
+Download entry spans network transfer, processing and native layer import.
+
+Results include catalogue counts, temporary preview layers, completed observation
+and raster files, manifests, and successfully attached native layers. Select a
+layer result to show it in Layers while that exact attachment is available.
+Select a completed file to reveal it in its folder. A cleared preview, detached
+layer or missing file keeps its description and shows its navigation as unavailable.
+**Saved, not added** explains when completed data remains on disk but the original
+model could not accept a new layer.
+
+Messages have timestamps and severities and are also sent to the ordinary plugin
+Output and application Message Logs. Each run has its own cancellation control;
+cancelling one download leaves the other tool's work running. A cancellation
+request awaits the active stage's settlement, including native import.
+
+History stays in memory for the current application session, retaining up to 100
+finished runs per window and 1,000 messages per run. Active runs remain until
+settled. Removing history leaves downloaded files and attached native layers in
+place. The download manifests and completed files persist across GUI restarts.
+
 ## Elevation raster files
 
 The selected National Map products are downloaded as original GeoTIFF tiles. A
@@ -175,21 +236,21 @@ model's map; saved files remain available if that model has closed.
 
 ## Typed review ownership and invalidation
 
-This package requires the installed GUI SDK **1.9**, its typed lifecycle,
+This package requires the installed GUI SDK **1.11**, its typed lifecycle,
 view/activity and native observation-import services, and its separately
-discoverable `IProgress` shared progress and `IPreviewLayers` preview-layer
-services. A review belongs to an exact Ready **open session**
+discoverable `IToolbox`, `IToolRuns`, `IToolPreviews`, `ISharedRibbon`, `IProgress` and
+`IPreviewLayers` capabilities. Tool panels share provider-independent workflow
+code while keeping their editable state, preview attachments, worker attribution
+and cancellation independent. A review belongs to an exact Ready **open session**
 and load generation. Two open models may share a saved project UUID; switching
 between them never transfers a review. Focusing a utility document keeps the
 existing model context. Closing, failed loading or replacing that context stops
 pending work and clears its review.
 
 Returning from a utility tab preserves the same model's catalogue selection and
-download controls. A viewport notification with the same reviewed area and CRS
-does not replace the preview layer. A completed review also survives a transient
-tab-layout resize that restores its original area before revision reconciliation;
-write actions stay disabled during that transition. A settled change in area or
-CRS revokes the review and cannot later revive it without a fresh Preview.
+download controls. Viewport notifications (pan, zoom, dock or ribbon resizes, canvas
+CRS) never replace the preview layer, cancel work or revoke a review in either area
+mode: the reviewed area is the one frozen at Preview.
 Selecting catalogue rows while an unchanged
 source has a queued revision temporarily disables write actions; qualified
 notification delivery restores them. A relevant source change still clears the
@@ -197,7 +258,7 @@ review, even if its current geometry happens to match the earlier snapshot.
 
 | Native change | Current viewport review | Loaded polygon review |
 | --- | --- | --- |
-| View extent, canvas CRS or resize | Keep the completed display for inspection; revoke export authority | Keep when the chosen polygon is unchanged |
+| View extent, canvas CRS or resize | Keep; the area frozen at Preview stays reviewed | Keep when the chosen polygon is unchanged |
 | Chosen boundary geometry, source, CRS, filter, selection or field schema | Not a viewport input | Clear and refresh boundary choices |
 | Chosen boundary title, visibility or other source metadata | Not a viewport input | Conservatively clear and refresh choices |
 | Chosen attachment removal or detach/reattach, even with the same native ID | Keep the viewport review | Clear; the replacement has a new runtime identity |
@@ -212,8 +273,8 @@ cutoff for each explicit review, so a queued change that happened before the
 review began cannot clear the new review. Exact geometry, feature eligibility,
 attachment identity, available source/filter/CRS metadata and the complete selected
 FID fingerprint are checked again before adopting new results, caching,
-retrying or exporting. An older completed display may remain visible after viewport
-changes, but never grants authority to those actions. Selected boundary IDs are read in bounded pages; holes and multipart
+retrying or exporting. A retained display that lost its authority may remain
+visible, but never grants authority to those actions. Selected boundary IDs are read in bounded pages; holes and multipart
 geometry remain exact.
 
 Typed notifications arrive after native changes commit. An action that races an

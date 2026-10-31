@@ -1,7 +1,7 @@
 # OpenSWMM Data Sources
 
 An independently built native plugin for `openswmm.gui`, consuming the installed
-GUI SDK 1.9, matching Qt with Qt SVG, and GDAL. The SDK and plugin host remain in the GUI repo.
+GUI SDK 1.11, matching Qt with Qt SVG, and GDAL. The SDK and plugin host remain in the GUI repo.
 
 The source repository is [HydroCouple/hydrocouple.gui.data](https://github.com/HydroCouple/hydrocouple.gui.data).
 The plugin identity remains `openswmm.gui.data`; the hosted repository name does
@@ -23,8 +23,12 @@ remain separate work.
 **Clear preview** removes the temporary site layer or elevation footprints and
 catalogue rows, including a preview still being fetched. Saved downloads and
 imported layers remain available. Preview, download and import stages use the
-GUI's shared status bar and native **Logs** panel; completed files and successful
-layer additions are reported separately.
+GUI's shared status bar and native **Logs** panel. Each tool's **Results** and
+**Messages** show its execution records, and the toolbox's **History** tab shows
+runs across tools with their start/end timestamps and elapsed time. Saved files
+and layer references remain available for inspection after a panel is hidden.
+History lasts for the current GUI session. Completed download folders and their
+manifests remain available after restart.
 
 ```sh
 cmake -S . -B build \
@@ -39,8 +43,19 @@ application kit. An existing GUI dependency prefix can be reused with
 `VCPKG_MANIFEST_MODE=OFF` and `VCPKG_INSTALLED_DIR` pointing at that prefix's parent.
 
 Add the built plugin directory in **Tools → Plugins…**, then restart the GUI.
-The plugin adds its own **Data** ribbon tab. Its **USGS time series…** and
-**Elevation raster…** commands open the **Data sources** dock. The
+Use the **Analysis Toolbox** button on the **View** ribbon. Under **Data sources →
+Download data**, **USGS time series…** and **Elevation raster…** each open their own
+dockable tool panel. The command palette provides the same commands.
+
+Ribbon placement is optional. In **Preferences → Extensions — Data sources → Ribbon placement**, choose
+**Toolbox only** (the default), **Shared Data tab**, or **Separate Data tab** and apply
+the preference. The shared tab can contain command groups from several plugins.
+Changing placement applies immediately and keeps the tool panels and previews available.
+The toolbox's graphical **Tags** checklist filters tools. Both have **Download** and
+**USGS** tags; **Time series** narrows to gages, and **Raster** narrows to elevation.
+All selected tags must match. Opening from the tree, ribbon or command palette
+raises the same tool panel. Both previews can coexist. Clearing or hiding one
+panel preserves the other panel's selection and download controls. The
 monitoring-gage and elevation/raster icons follow the GUI's light/dark palette and
 remain visible in command menus. See [the guide](docs/guide.md).
 After **Preview**, **USGS gages (preview)** or **DEM tiles (preview)** provides the
@@ -53,13 +68,15 @@ layer** action saves the selected, visible Data rows. Sorting Data rows preserve
 an unchanged native preview population; changing that population resets its
 native query and styling.
 The preview is omitted from project saves; an explicit feature export is persistent.
-Moving the viewport keeps a completed preview available for inspection, but a
-fresh preview is required before saving features from the new area. Attributes
-describe the recorded catalogue response. The download controls choose the actual
-observation period and measurement; an empty response does not imply zero flow.
+The area is frozen at Preview: panning, zooming or resizing the map afterwards
+keeps the previewed rows, Download and feature export; Preview again to search the
+new view. Attributes describe the recorded catalogue response. The download
+controls choose the actual observation period and measurement; the dates are
+limited to the selected sites' published record. An empty response does not imply
+zero flow.
 Use **Details and advanced options** for the full saved-property table and filters.
 All new C++ interfaces and source files use Doxygen comments. The plugin requires
-SDK 1.9 typed lifecycle, view, UI activity, native time-series import, shared
+SDK 1.11 toolbox, shared ribbon, tool-run history, independent tool previews, typed lifecycle, view, UI activity, native time-series import, shared
 progress and preview-layer services. Review ownership uses the
 per-open session and load generation, including when two models share a saved UUID.
 The guide distinguishes retained display from export authority and documents how

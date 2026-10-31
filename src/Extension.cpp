@@ -1,6 +1,6 @@
 /**
  * @file Extension.cpp
- * @brief Standalone SDK-only registration of the Data ribbon, preview dock and preferences.
+ * @brief SDK-only Data tools with optional private/shared ribbon placement and preferences.
  * @details The extension links Qt, GDAL and the installed SDK. No GUI private header, engine
  * handle or executable symbol is used. Host ownership and QObject guards govern all UI callbacks.
  * @author Caleb Buahin <caleb.buahin@gmail.com>
@@ -10,7 +10,12 @@
  */
 #include "PreviewPanel.hpp"
 #include "CommandIcons.hpp"
+#include <sdk/IToolbox.hpp>
+#include <sdk/IToolPreviews.hpp>
+#include <sdk/IToolRuns.hpp>
+#include <sdk/ISharedRibbon.hpp>
 #include <sdk/IGuiExtension.hpp>
+#include <QComboBox>
 #include <QFormLayout>
 #include <QLabel>
 #include <QSpinBox>
@@ -21,7 +26,6 @@ using namespace OpenSWMM::Data;
 /** @brief Independently built catalogue-preview plugin with dynamically hosted contributions. */
 class DataExtension final : public QObject,
                             public IGuiExtension,
-                            public IDockPanelFactory,
                             public IPreferencesPageFactory
 {
     Q_OBJECT
@@ -53,30 +57,51 @@ public:
             !qobject_cast<IViewControls *>(lifetime) ||
             !qobject_cast<ITimeSeriesLayers *>(lifetime) ||
             !qobject_cast<IProgress *>(lifetime) ||
-            !qobject_cast<IPreviewLayers *>(lifetime)) {
+            !qobject_cast<IPreviewLayers *>(lifetime) ||
+            !qobject_cast<IToolbox *>(lifetime) ||
+            !qobject_cast<IToolPreviews *>(lifetime) ||
+            !qobject_cast<IToolRuns *>(lifetime) ||
+            !qobject_cast<ISharedRibbon *>(lifetime)) {
             if (error)
                 *error = tr(
-                    "Data sources requires SDK 1.9 lifecycle, view, activity, selected-feature, preview-layer, time-series layer and progress services.");
+                    "Data sources requires SDK 1.11 toolbox, shared ribbon, tool previews, analysis runs, lifecycle, native layers and progress services.");
             return false;
         }
         mHost = host;
+        mSettings = host->settings();
+        mRibbonPlacement = QStringLiteral("toolbox");
         auto *sites = new QAction(tr("USGS time series…"), host->lifetime());
         auto *terrain = new QAction(tr("Elevation raster…"), host->lifetime());
         setCommandIcon(sites, CommandIcon::MonitoringSites);
         setCommandIcon(terrain, CommandIcon::ElevationFootprints);
-        connect(sites, &QAction::triggered, host->lifetime(), [this]() { show(Source::Sites); });
-        connect(terrain, &QAction::triggered, host->lifetime(),
-                [this]() { show(Source::Terrain); });
+        auto *toolbox = qobject_cast<IToolbox *>(lifetime);
+        const ToolSpec gages{"sites", "sites", tr("Preview and download USGS observations"),
+                             {{"download", tr("Download data")}},
+                             {"download", "usgs", "streamgages", "time-series"}, tr("Data sources")};
+        const ToolSpec dem{"terrain", "terrain", tr("Preview and download elevation rasters"),
+                           {{"download", tr("Download data")}},
+                           {"download", "usgs", "elevation", "raster"}, tr("Data sources")};
         if (!host->ui()->registerAction("sites", sites) ||
             !host->ui()->registerAction("terrain", terrain) ||
-            !host->ui()->registerDockPanelFactory(this) ||
-            !host->ui()->registerPreferencesPage(this) ||
-            !host->ui()->registerRibbonTab(
-                {"data", tr("Data"), false, {{tr("Download data"), {"sites", "terrain"}}}})) {
+            !toolbox->registerTool(gages, lifetime, [this](ExtensionHost *owner) {
+                mSitesPanel = new PreviewPanel(owner, Source::Sites, "sites");
+                return mSitesPanel.data();
+            }, error) ||
+            !toolbox->registerTool(dem, lifetime, [this](ExtensionHost *owner) {
+                mTerrainPanel = new PreviewPanel(owner, Source::Terrain, "terrain");
+                return mTerrainPanel.data();
+            }, error) ||
+            !host->ui()->registerPreferencesPage(this)) {
             if (error)
                 *error = tr("Could not register the Data interface.");
             return false;
         }
+        QString ribbonError;
+        const auto placement = mSettings
+                                   ? mSettings->value("ribbonPlacement", QStringLiteral("toolbox")).toString()
+                                   : QStringLiteral("toolbox");
+        if (!setRibbonPlacement(placement, &ribbonError))
+            host->console()->append("warning", ribbonError);
         host->console()->append(
             "info",
             tr("Data sources loaded. Preview an area, then select sites or tiles to download."));
@@ -85,25 +110,20 @@ public:
     /** @brief Abort pending previews and downloads before host-owned widgets are destroyed. */
     void shutdown() override
     {
-        if (mPanel)
-            mPanel->cancel();
+        if (mSitesPanel)
+            mSitesPanel->cancel();
+        if (mTerrainPanel)
+            mTerrainPanel->cancel();
         mHost = nullptr;
         mSettings = nullptr;
+        mRibbonPlacement = QStringLiteral("toolbox");
     }
     /** @brief Enumerate contribution families. @return Owning capability captions. */
-    QStringList contributions() const override { return {"ribbon", "dock", "preferences"}; }
+    QStringList contributions() const override { return {"ribbon", "toolbox", "dock", "preferences"}; }
     /** @brief Identify the dock/preferences factory in its distinct host registries. @return Stable local identity. */
     QString id() const override { return "data"; }
     /** @brief Supply the dock/preferences caption. @return Translated title. */
     QString title() const override { return tr("Data sources"); }
-    /** @brief Create the host-owned catalogue dock.
-     * @param[in] host Borrowed initialized extension host.
-     * @return New widget transferring to host ownership. */
-    QWidget *create(ExtensionHost *host) override
-    {
-        mPanel = new PreviewPanel(host);
-        return mPanel;
-    }
     /** @brief Create this plugin's preferences page.
      * @param[in] settings Borrowed namespaced storage.
      * @return New widget transferred to the Preferences dialog. */
@@ -116,6 +136,18 @@ public:
         mLimit->setRange(1, 5000);
         mLimit->setValue(settings->value("previewLimit", 500).toInt());
         form->addRow(tr("Maximum catalogue records per preview"), mLimit);
+        mRibbonChoice = new QComboBox(page);
+        mRibbonChoice->setObjectName("dataRibbonPlacement");
+        mRibbonChoice->addItem(tr("Toolbox only"), "toolbox");
+        mRibbonChoice->addItem(tr("Shared Data tab"), "shared");
+        mRibbonChoice->addItem(tr("Separate Data tab"), "separate");
+        mRibbonChoice->setCurrentIndex(mRibbonChoice->findData(mRibbonPlacement));
+        form->addRow(tr("Ribbon placement"), mRibbonChoice);
+        auto *ribbonNote = new QLabel(
+            tr("Ribbon changes apply immediately. Both tools are available in the Analysis Toolbox."),
+            page);
+        ribbonNote->setWordWrap(true);
+        form->addRow(ribbonNote);
         auto *note = new QLabel(
             tr("Large areas may contain more records. The preview reports when more catalogue results are available."),
             page);
@@ -123,30 +155,81 @@ public:
         form->addRow(note);
         return page;
     }
-    /** @brief Persist the edited request limit when the host applies preferences. */
+    /** @brief Apply ribbon placement immediately and persist the accepted preferences. */
     void apply() override
     {
         if (mSettings && mLimit)
             mSettings->setValue("previewLimit", mLimit->value());
+        if (!mHost || !mSettings || !mRibbonChoice)
+            return;
+        QString error;
+        const QPointer<QObject> lifetime(mHost->lifetime());
+        const bool changed = setRibbonPlacement(mRibbonChoice->currentData().toString(), &error);
+        if (!lifetime || !mHost || !mSettings || !mRibbonChoice)
+            return;
+        if (changed)
+            mSettings->setValue("ribbonPlacement", mRibbonPlacement);
+        else {
+            mRibbonChoice->setCurrentIndex(mRibbonChoice->findData(mRibbonPlacement));
+            mHost->console()->append("warning", error);
+            if (lifetime && mHost)
+                mHost->ui()->statusMessage(error);
+        }
     }
-    /** @brief Restore the page's default request limit. */
+    /** @brief Restore the default preview limit and toolbox-only placement in the page. */
     void reset() override
     {
         if (mLimit)
             mLimit->setValue(500);
+        if (mRibbonChoice)
+            mRibbonChoice->setCurrentIndex(mRibbonChoice->findData("toolbox"));
     }
 
 private:
-    void show(Source source)
+    /** @brief Mount the chosen optional ribbon before retiring the preceding placement.
+     * @param[in] requested toolbox, shared or separate; unknown saved values use toolbox.
+     * @param[out] error Optional mounting refusal detail, cleared on entry.
+     * @return True after applying the placement. A refused mount retains the previous tab. */
+    bool setRibbonPlacement(const QString &requested, QString *error)
     {
-        if (mPanel)
-            mPanel->setSource(source);
-        if (mHost)
-            mHost->ui()->showDock("data");
+        if (error)
+            error->clear();
+        if (!mHost)
+            return false;
+        const QString placement = requested == "shared" || requested == "separate"
+                                      ? requested : QStringLiteral("toolbox");
+        if (placement == mRibbonPlacement)
+            return true;
+        const QPointer<QObject> lifetime(mHost->lifetime());
+        auto *shared = qobject_cast<ISharedRibbon *>(lifetime.data());
+        bool mounted = true;
+        if (placement == "shared")
+            mounted = shared && shared->registerSharedRibbonTab(
+                {"data", "data", tr("Data"), {{tr("Download data"), {"sites", "terrain"}}}}, error);
+        else if (placement == "separate")
+            mounted = mHost->ui()->registerRibbonTab(
+                {"data", tr("Data"), false, {{tr("Download data"), {"sites", "terrain"}}}});
+        if (!lifetime || !mHost)
+            return false;
+        if (!mounted) {
+            if (error && error->isEmpty())
+                *error = tr("Could not apply the selected Data ribbon placement.");
+            return false;
+        }
+        const QString previous = mRibbonPlacement;
+        mRibbonPlacement = placement;
+        if (previous == "shared" && shared)
+            shared->unregisterSharedRibbonTab("data");
+        else if (previous == "separate")
+            mHost->ui()->unregisterRibbonTab("data");
+        return lifetime && mHost;
     }
     ExtensionHost *mHost = nullptr;
     ISettings *mSettings = nullptr;
-    QPointer<PreviewPanel> mPanel;
+    QPointer<PreviewPanel> mSitesPanel; ///< Independent gage preview/download dock.
+    QPointer<PreviewPanel> mTerrainPanel; ///< Independent terrain preview/download dock.
     QPointer<QSpinBox> mLimit;
+    QPointer<QComboBox> mRibbonChoice; ///< Dialog-owned staged ribbon placement.
+    QString mRibbonPlacement = "toolbox"; ///< Currently mounted placement, independent of a live page.
 };
 #include "Extension.moc"

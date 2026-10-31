@@ -45,12 +45,14 @@
 #include <QTimer>
 #include <QToolButton>
 #include <QTreeView>
+#include <QUrlQuery>
 #include <QVBoxLayout>
 #include <algorithm>
 #include <cstring>
 #include <memory>
 #include <limits>
 #include <vector>
+#include <map>
 
 using namespace OpenSWMM::Sdk;
 using OpenSWMM::Data::PreviewPanel;
@@ -83,6 +85,23 @@ QByteArray catalogue()
 }
 
 /** @brief Retain heterogeneous saved monitoring attributes, including numeric strings and JSON. */
+/** @brief Build a USGS time-series-metadata page of streamflow records.
+ * @param[in] rows Location ID, begin and end timestamps, as the service publishes them.
+ * @param[in] interval `Daily` or `Points`. */
+QByteArray recordPeriods(const QList<QStringList> &rows, const QString &interval = "Daily")
+{
+    QJsonArray features;
+    for (const auto &row : rows)
+        features.append(QJsonObject{{"type", "Feature"},
+                                    {"properties",
+                                     QJsonObject{{"monitoring_location_id", row[0]},
+                                                 {"parameter_code", "00060"},
+                                                 {"computation_period_identifier", interval},
+                                                 {"begin", row[1]},
+                                                 {"end", row[2]}}}});
+    return QJsonDocument(QJsonObject{{"type", "FeatureCollection"}, {"features", features}})
+        .toJson();
+}
 QByteArray richCatalogue()
 {
     const auto site = [](const QString &id, const QString &title, QJsonObject properties, double x,
@@ -141,6 +160,16 @@ public:
         setFinished(true);
         emit finished();
     }
+    /** @brief Finish as a service failure without delivering the body. */
+    void fail(const QString &message)
+    {
+        if (isFinished())
+            return;
+        setError(QNetworkReply::ServiceUnavailableError, message);
+        setFinished(true);
+        emit errorOccurred(QNetworkReply::ServiceUnavailableError);
+        emit finished();
+    }
     /** @brief Cooperatively settle an aborted response without further completion delivery. */
     void abort() override
     {
@@ -176,12 +205,20 @@ public:
     int requestCount = 0; ///< Actual network requests observed by the controlled policy client.
     QPointer<Reply>
         reply; ///< Latest synthetic reply, guarded through cancellation/deferred deletion.
+    int periodRequests = 0;     ///< Record-period metadata requests, counted separately.
+    QPointer<Reply> periodReply; ///< Latest record-period reply.
+    QByteArray periodBody = R"({"type":"FeatureCollection","features":[]})"; ///< Its body.
     bool allowed(const QUrl &) const override { return true; }
     QNetworkAccessManager *shared() override { return this; }
 
 protected:
     QNetworkReply *createRequest(Operation, const QNetworkRequest &request, QIODevice *) override
     {
+        if (request.url().path().contains("time-series-metadata")) {
+            ++periodRequests;
+            periodReply = new Reply(request, periodBody, this);
+            return periodReply;
+        }
         ++requestCount;
         reply = new Reply(request, catalogue(), this);
         return reply;
@@ -366,7 +403,7 @@ public:
 };
 
 /** @brief Installed-SDK-only host whose authoritative mutations precede explicit notification delivery. */
-class Host final : public QObject,
+class Host : public QObject,
                    public ExtensionHost,
                    public ISessionEvents,
                    public IViewEvents,
@@ -769,6 +806,87 @@ signals:
     void beforeSave(const SaveRequest &request);
 };
 
+/** @brief Independent production tool panels use separate native preview channels. */
+class ToolHost final : public Host, public IToolPreviews
+{
+    Q_OBJECT
+    Q_INTERFACES(OpenSWMM::Sdk::IToolPreviews)
+public:
+    struct Channel {
+        QUuid session; ///< Exact owner session.
+        Project project; ///< Independent preview population and selection.
+    };
+    std::map<QString, std::unique_ptr<Channel>> channels;
+    /** @brief Publish one exact-generation tool population without replacing another. */
+    bool showToolPreview(const QUuid &session, quint64 generation, const QString &tool,
+                          const QJsonObject &value, QString *error) override
+    {
+        for (const auto &entry : entries) {
+            if (entry->state.sessionId != session || entry->state.loadGeneration != generation)
+                continue;
+            const auto key = session.toString() + tool;
+            auto &channel = channels[key];
+            if (!channel) {
+                channel = std::make_unique<Channel>();
+                channel->session = session;
+                channel->project.model = entry->model.get();
+            }
+            return channel->project.showPreview(value, error);
+        }
+        return false;
+    }
+    /** @brief Dispose only the selected tool population. */
+    void clearToolPreview(const QUuid &session, const QString &tool) override
+    {
+        const auto found = channels.find(session.toString() + tool);
+        if (found != channels.end())
+            found->second->project.clearPreview();
+    }
+    /** @brief Resolve FIDs by both tool and session. */
+    QUuid toolPreviewLayer(const QUuid &session, const QString &tool,
+                           QList<qint64> *fids = nullptr) const override
+    {
+        if (fids)
+            fids->clear();
+        const auto found = channels.find(session.toString() + tool);
+        if (found == channels.end())
+            return {};
+        if (fids)
+            *fids = found->second->project.previewFids;
+        return found->second->project.previewAttachment;
+    }
+    /** @brief Route selection by exact independent attachment. */
+    bool executeViewCommand(const ViewCommand &command, QString *error) override
+    {
+        for (const auto &[key, channel] : channels) {
+            auto &project = channel->project;
+            if (channel->session == command.sessionId &&
+                project.previewAttachment == command.layerSessionId) {
+                project.previewSelection = QSet<qint64>(command.featureIds.cbegin(),
+                                                        command.featureIds.cend());
+                for (const auto &entry : entries)
+                    if (entry->state.sessionId == command.sessionId)
+                        viewChange(entry.get(), ViewEventKind::LayerSelectionChanged,
+                                    project.previewAttachment);
+                return true;
+            }
+        }
+        return Host::executeViewCommand(command, error);
+    }
+    /** @brief Inspect only the exact tool attachment's selection. */
+    QList<qint64> selectedLayerFeatures(const QUuid &session, const QUuid &attachment,
+                                        int offset, int limit) const override
+    {
+        for (const auto &[key, channel] : channels)
+            if (channel->session == session && channel->project.previewAttachment == attachment) {
+                auto selected = channel->project.previewSelection.values();
+                std::sort(selected.begin(), selected.end());
+                return selected.mid(offset, qMin(limit, 5000));
+            }
+        return Host::selectedLayerFeatures(session, attachment, offset, limit);
+    }
+};
+
 /** @brief Retain one independent case's real panel, source and recorded input. */
 struct Fixture {
     QString
@@ -888,6 +1006,67 @@ class PreviewTest final : public QObject
 {
     Q_OBJECT
 private slots:
+    /** @brief Open both real provider panels, select gages, then clear only DEM footprints. */
+    void toolPanelsKeepPreviewsAndSelectionIndependent()
+    {
+        const auto directory = QDir(QStringLiteral(SDK_DATA_PREVIEW_VERIFICATION_DIRECTORY))
+                                   .filePath("tool-panels/" + QUuid::createUuid().toString());
+        QVERIFY(QDir().mkpath(directory));
+        ToolHost host;
+        const auto *entry = host.addModel(directory + "/model");
+        const auto sitesFile = directory + "/sites.json";
+        const auto demFile = directory + "/dem.json";
+        {
+            QFile file(sitesFile);
+            QVERIFY(file.open(QIODevice::WriteOnly));
+            file.write(catalogue());
+        }
+        {
+            QFile file(demFile);
+            QVERIFY(file.open(QIODevice::WriteOnly));
+            const QByteArray tiles = R"({"total":1,"items":[{"sourceId":"dem-a","title":"Elevation tile","boundingBox":{"minX":-78,"minY":39,"maxX":-76,"maxY":42},"downloadURL":"https://example.test/tile.tif"}]})";
+            file.write(tiles);
+        }
+        PreviewPanel sites(&host, OpenSWMM::Data::Source::Sites, "sites");
+        PreviewPanel terrain(&host, OpenSWMM::Data::Source::Terrain, "terrain");
+        sites.loadCatalogue(sitesFile);
+        host.jobs.back()->complete();
+        terrain.loadCatalogue(demFile);
+        host.jobs.back()->complete();
+        host.drain();
+        const auto session = entry->state.sessionId;
+        const auto sitesId = host.toolPreviewLayer(session, "sites");
+        const auto demId = host.toolPreviewLayer(session, "terrain");
+        QVERIFY(!sitesId.isNull());
+        QVERIFY(!demId.isNull());
+        QVERIFY(sitesId != demId);
+        auto *table = sites.findChild<QTableView *>("dataCatalogue");
+        QVERIFY(table);
+        table->selectRow(0);
+        host.drain();
+        QVERIFY(sites.findChild<QPushButton *>("dataDownload")->isEnabled());
+        terrain.clearPreview();
+        host.drain();
+        QVERIFY(host.toolPreviewLayer(session, "terrain").isNull());
+        QCOMPARE(host.toolPreviewLayer(session, "sites"), sitesId);
+        QCOMPARE(table->selectionModel()->selectedRows().size(), 1);
+        QVERIFY(sites.findChild<QPushButton *>("dataDownload")->isEnabled());
+        sites.hide();
+        sites.show();
+        host.drain();
+        QCOMPARE(host.toolPreviewLayer(session, "sites"), sitesId);
+        QVERIFY(sites.findChild<QPushButton *>("dataDownload")->isEnabled());
+        QVERIFY(sites.findChild<QComboBox *>("dataSource")->isHidden());
+        QVERIFY(terrain.findChild<QComboBox *>("dataSource")->isHidden());
+        sites.setSource(OpenSWMM::Data::Source::Terrain);
+        terrain.setSource(OpenSWMM::Data::Source::Sites);
+        QCOMPARE(sites.findChild<QComboBox *>("dataSource")->currentIndex(), 0);
+        QCOMPARE(terrain.findChild<QComboBox *>("dataSource")->currentIndex(), 1);
+        QVERIFY(!sites.findChild<QComboBox *>("dataSource")->isEnabled());
+        QVERIFY(!terrain.findChild<QComboBox *>("dataSource")->isEnabled());
+    }
+
+private slots:
     /** @brief Confirm every fixture file can be retained in the configured repository directory. */
     void initTestCase() { QVERIFY(QDir().mkpath(SDK_DATA_PREVIEW_VERIFICATION_DIRECTORY)); }
     /** @brief The default flow hides unrelated area/product inputs and advanced inspection. */
@@ -940,6 +1119,31 @@ private slots:
         QCOMPARE(f.host.activeProgress(), 0);
         QVERIFY(f.host.events.join('\n').contains("preview cleared"));
         QVERIFY(!f.control<QPushButton>("dataDownload")->isEnabled());
+    }
+    /** @brief First DEM preview enables Clear before native layer notifications arrive. */
+    void firstDemPreviewCanClearWithoutSelection()
+    {
+        Fixture f;
+        f.panel->setSource(OpenSWMM::Data::Source::Terrain);
+        const QByteArray tiles = R"({"total":1,"items":[{"sourceId":"dem-a","title":"Elevation tile","boundingBox":{"minX":-78,"minY":39,"maxX":-76,"maxY":42},"downloadURL":"https://example.test/tile.tif"}]})";
+        QVERIFY(f.record(tiles));
+        auto &project = f.entry->model->projectValue;
+        project.previewChanged = [&] {
+            // A real native preview changes its session revision synchronously,
+            // while detailed attachment observations reach consumers later.
+            f.host.viewChange(f.entry, ViewEventKind::LayerAdded, project.previewAttachment);
+        };
+        QVERIFY(f.review());
+        QCOMPARE(f.rows(), 1);
+        QVERIFY(f.control<QTableView>("dataCatalogue")->selectionModel()->selectedRows().isEmpty());
+        QVERIFY(!f.control<QPushButton>("dataDownload")->isEnabled());
+        QVERIFY(f.control<QPushButton>("dataClearPreview")->isEnabled());
+        f.control<QPushButton>("dataClearPreview")->click();
+        QCOMPARE(f.rows(), 0);
+        QVERIFY(!f.hasOverlay());
+        f.host.drain();
+        QCOMPARE(f.rows(), 0);
+        QVERIFY(!f.hasOverlay());
     }
     /** @brief Pending network and latched parse completions cannot resurrect a cleared preview. */
     void clearPendingPreviewFencesLateWork()
@@ -1118,6 +1322,83 @@ private slots:
         f.entry->model->open = false;
         f.panel->downloadTo(QString::fromLatin1(SDK_DATA_PREVIEW_VERIFICATION_DIRECTORY));
         QCOMPARE(f.host.policy.requestCount, networkCount);
+    }
+    /** @brief Selected sites limit the period to the union of their published records. */
+    void selectedSitesLimitObservationPeriod()
+    {
+        Fixture f;
+        QVERIFY(f.record(richCatalogue()));
+        QVERIFY(f.review());
+        auto *from = f.control<QDateEdit>("dataStartDate");
+        auto *to = f.control<QDateEdit>("dataEndDate");
+        auto *note = f.control<QLabel>("dataRecordPeriod");
+        const auto unlimited = from->minimumDate();
+        from->setDate({1990, 1, 1});
+        to->setDate({1990, 1, 31});
+        auto &network = f.host.policy;
+        network.periodBody =
+            recordPeriods({{"site-one", "2001-05-01T05:00:00+00:00", "2010-02-01T05:00:00+00:00"},
+                           {"site-two", "1995-03-01T05:00:00+00:00", "2005-12-31T05:00:00+00:00"}});
+        auto *table = f.control<QTableView>("dataCatalogue");
+        table->selectAll();
+        f.host.drain();
+        QTRY_VERIFY(network.periodReply);
+        const QUrlQuery query(network.periodReply->url());
+        QCOMPARE(query.queryItemValue("monitoring_location_id"), "site-one,site-three,site-two");
+        QCOMPARE(query.queryItemValue("parameter_code"), "00060");
+        QCOMPARE(query.queryItemValue("computation_period_identifier"), "Daily");
+        network.periodReply->complete();
+        QTRY_COMPARE(from->minimumDate(), QDate(1995, 3, 1));
+        QCOMPARE(to->maximumDate(), QDate(2010, 2, 1));
+        // The chosen period was outside the record: show its last 30 days.
+        QCOMPARE(from->date(), QDate(2010, 1, 2));
+        QCOMPARE(to->date(), QDate(2010, 2, 1));
+        QCOMPARE(note->text(), "Published record: 1995-03-01 to 2010-02-01 (2 of 3 selected sites).");
+        QTRY_VERIFY(f.control<QPushButton>("dataDownload")->isEnabled());
+        // Continuous measurements query again; an overlapping span is clamped, not moved.
+        from->setDate({2003, 12, 1});
+        to->setDate({2004, 3, 1});
+        network.periodBody = recordPeriods(
+            {{"site-two", "2003-01-01T05:00:00+00:00", "2004-01-15T05:00:00+00:00"}}, "Points");
+        const auto requests = network.periodRequests;
+        f.control<QComboBox>("dataInterval")->setCurrentIndex(1);
+        QCOMPARE(from->minimumDate(), unlimited); // Earlier limits do not constrain the new query.
+        QTRY_COMPARE(network.periodRequests, requests + 1);
+        QCOMPARE(QUrlQuery(network.periodReply->url()).queryItemValue("computation_period_identifier"),
+                 "Points");
+        network.periodReply->complete();
+        QTRY_COMPARE(to->date(), QDate(2004, 1, 15));
+        QCOMPARE(from->date(), QDate(2003, 12, 1));
+        QCOMPARE(note->text(), "Published record: 2003-01-01 to 2004-01-15 (1 of 3 selected sites).");
+        // Clearing the selection removes the limits and keeps the dates.
+        table->clearSelection();
+        f.host.drain();
+        QCOMPARE(from->minimumDate(), unlimited);
+        QCOMPARE(to->maximumDate(), QDateEdit().maximumDate());
+        QCOMPARE(from->date(), QDate(2003, 12, 1));
+        QVERIFY(note->text().isEmpty());
+    }
+    /** @brief An unavailable record listing leaves the dates unlimited and never gates Download. */
+    void unavailableRecordPeriodKeepsDatesUnlimited()
+    {
+        Fixture f;
+        QVERIFY(f.review());
+        auto *from = f.control<QDateEdit>("dataStartDate");
+        auto *note = f.control<QLabel>("dataRecordPeriod");
+        const auto unlimited = from->minimumDate();
+        const auto chosen = from->date();
+        f.select();
+        QVERIFY(f.control<QPushButton>("dataDownload")->isEnabled());
+        QCOMPARE(note->text(), "Checking the published record…");
+        QTRY_VERIFY(f.host.policy.periodReply);
+        f.host.policy.periodReply->fail("Service unavailable");
+        QTRY_COMPARE(note->text(), "Published record unknown: Service unavailable.");
+        QCOMPARE(from->minimumDate(), unlimited);
+        QCOMPARE(from->date(), chosen);
+        QVERIFY(f.control<QPushButton>("dataDownload")->isEnabled());
+        // DEM tiles have no observation period.
+        f.control<QComboBox>("dataSource")->setCurrentIndex(1);
+        QVERIFY(note->text().isEmpty());
     }
     /** @brief A current review exports its exact area/source IDs and uses no legacy subscription. */
     void currentReviewCanExport()
@@ -1513,9 +1794,12 @@ private slots:
         Fixture f;
         QVERIFY(f.record(richCatalogue()));
         QVERIFY(f.review());
-        f.entry->model->projectValue.viewport = polygon(true);
-        f.host.stateChange(f.entry, StateChange::Viewport);
+        f.select();
+        // An undelivered model revision refuses the export and retains the display.
+        f.host.stateChange(f.entry, StateChange::Model);
+        f.exportSelection();
         f.host.drain();
+        QVERIFY(f.entry->model->projectValue.exports.isEmpty());
         QCOMPARE(f.rows(), 3);
         QCOMPARE(f.overlayCount(), 3);
         QVERIFY(f.filter("agency", "Equals", "USGS"));
@@ -1534,18 +1818,17 @@ private slots:
         QVERIFY(!f.hasOverlay());
         QCOMPARE(f.control<QTableView>("dataAttributes")->model()->rowCount(), 0);
     }
-    /** @brief A pending viewport revision revokes export immediately while retaining the adopted display. */
-    void pendingViewportExportKeepsInspectionDisplay()
+    /** @brief A pending model revision revokes export immediately while retaining the adopted viewport display. */
+    void pendingModelChangeExportKeepsViewportDisplay()
     {
         Fixture f;
         QVERIFY(f.record(richCatalogue()));
         QVERIFY(f.review());
         f.select();
         QVERIFY(f.control<QPushButton>("dataExport")->isEnabled());
-        f.entry->model->projectValue.viewport = polygon(true);
-        f.host.stateChange(f.entry, StateChange::Viewport);
+        f.host.stateChange(f.entry, StateChange::Model);
         // Deliberately withhold queued state delivery: export queries native
-        // authority synchronously before the viewport observation reaches the UI.
+        // authority synchronously before the model observation reaches the UI.
         f.exportSelection();
         QVERIFY(f.entry->model->projectValue.exports.isEmpty());
         QVERIFY(!f.control<QPushButton>("dataExport")->isEnabled());
@@ -1667,7 +1950,7 @@ private slots:
         QVERIFY(f.review());
         QCOMPARE(f.rows(), 1);
     }
-    /** @brief Viewport changes retain display but revoke export; polygon mode keeps its explicit area. */
+    /** @brief Both area modes keep the area frozen at Preview; only Preview searches a moved viewport. */
     void viewportScopeMatchesAreaMode()
     {
         Fixture f;
@@ -1678,9 +1961,15 @@ private slots:
         QCOMPARE(f.rows(), 1);
         QVERIFY(f.hasOverlay());
         f.select();
-        QVERIFY(!f.control<QPushButton>("dataExport")->isEnabled());
+        QVERIFY(f.control<QPushButton>("dataExport")->isEnabled());
         f.exportSelection();
-        QVERIFY(f.entry->model->projectValue.exports.isEmpty());
+        QCOMPARE(f.entry->model->projectValue.exports.size(), 1);
+        QFile file(f.entry->model->projectValue.exports.first());
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        QCOMPARE(QJsonDocument::fromJson(file.readAll()).object()["review"].toObject()["area"].toObject(),
+                 polygon());
+        QVERIFY(f.review()); // The moved viewport contains no recorded site.
+        QCOMPARE(f.rows(), 0);
         f.polygonMode();
         QVERIFY(f.review());
         const auto overlayWrites = f.entry->model->projectValue.overlayWrites;
@@ -1869,78 +2158,60 @@ private slots:
         f.host.drain();
         QVERIFY(f.control<QPushButton>("dataDownload")->isEnabled());
     }
-    /** @brief A transient layout resize restores the completed review only at its original final area. */
-    void transientViewportResizeKeepsCompletedDownload()
+    /** @brief Resizes, pans and canvas CRS changes keep a completed viewport review and its
+     * frozen area; a map selection made meanwhile waits only for the queued revision. */
+    void viewportChangesKeepCompletedDownload_data()
     {
+        QTest::addColumn<int>("change");
+        QTest::newRow("transient resize") << 0;
+        QTest::newRow("pan or zoom") << 1;
+        QTest::newRow("canvas CRS") << 2;
+    }
+    void viewportChangesKeepCompletedDownload()
+    {
+        QFETCH(int, change);
         Fixture f;
+        QVERIFY(f.record(richCatalogue()));
         QVERIFY(f.review());
         f.select();
         QVERIFY(f.control<QPushButton>("dataDownload")->isEnabled());
         const auto jobs = f.host.jobs.size();
-        const auto area = f.entry->model->projectValue.viewport;
-        f.entry->model->projectValue.viewport = polygon(true);
+        auto &project = f.entry->model->projectValue;
+        const auto area = project.viewport;
+        const auto population = project.overlay;
+        if (change == 2)
+            project.projectCrs = "EPSG:3857";
+        else
+            project.viewport = polygon(true);
         f.host.stateChange(f.entry, StateChange::Viewport);
-        f.host.drainFirstState(false);
-        QCOMPARE(f.rows(), 1);
-        QVERIFY(!f.control<QPushButton>("dataDownload")->isEnabled());
-        auto *table = f.control<QTableView>("dataCatalogue");
-        table->clearSelection();
-        f.select();
-        QVERIFY(!f.control<QPushButton>("dataExport")->isEnabled());
-        f.entry->model->projectValue.viewport = area;
-        f.host.stateChange(f.entry, StateChange::Viewport);
+        if (change == 0) {
+            project.viewport = area;
+            f.host.stateChange(f.entry, StateChange::Viewport);
+        }
+        f.host.mapSelect(f.entry, {project.previewFids[1]});
         f.host.drain();
+        QCOMPARE(f.selectedIds(), QStringList{"site-two"});
         QTRY_VERIFY(f.control<QPushButton>("dataDownload")->isEnabled());
         QVERIFY(f.control<QPushButton>("dataExport")->isEnabled());
-        QCOMPARE(f.rows(), 1);
+        QCOMPARE(f.rows(), 3);
+        QCOMPARE(project.overlay, population);
         QCOMPARE(f.host.jobs.size(), jobs);
+        f.exportSelection();
+        QCOMPARE(project.exports.size(), 1);
+        QFile file(project.exports.first());
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        QCOMPARE(QJsonDocument::fromJson(file.readAll()).object()["review"].toObject()["area"].toObject(),
+                 area);
     }
-    /** @brief A settled pan/CRS change revokes the review and cannot later revive without Preview. */
-    void finalViewportChangeStillRevokesDownload_data()
-    {
-        QTest::addColumn<bool>("crs");
-        QTest::newRow("pan or zoom") << false;
-        QTest::newRow("canvas CRS") << true;
-    }
-    void finalViewportChangeStillRevokesDownload()
-    {
-        QFETCH(bool, crs);
-        Fixture f;
-        QVERIFY(f.review());
-        f.select();
-        const auto area = f.entry->model->projectValue.viewport;
-        if (crs)
-            f.entry->model->projectValue.projectCrs = "EPSG:3857";
-        else
-            f.entry->model->projectValue.viewport = polygon(true);
-        f.host.stateChange(f.entry, StateChange::Viewport);
-        f.host.drainFirstState(false);
-        QVERIFY(!f.control<QPushButton>("dataDownload")->isEnabled());
-        f.host.drain();
-        QCOMPARE(f.rows(), 1);
-        QVERIFY(f.hasOverlay());
-        f.select();
-        QVERIFY(!f.control<QPushButton>("dataDownload")->isEnabled());
-        // Returning after a genuine change has settled cannot resurrect old authority.
-        f.entry->model->projectValue.viewport = area;
-        f.entry->model->projectValue.projectCrs = "EPSG:4326";
-        f.host.stateChange(f.entry, StateChange::Viewport);
-        f.host.drain();
-        f.select();
-        QVERIFY(!f.control<QPushButton>("dataDownload")->isEnabled());
-        QVERIFY(f.review());
-        f.select();
-        QVERIFY(f.control<QPushButton>("dataDownload")->isEnabled());
-    }
-    /** @brief Viewport mutations cancel pending work immediately instead of treating it as a completed review. */
-    void viewportMutationCancelsActiveWork_data()
+    /** @brief Viewport changes keep pending preview, payload transfer and native import work. */
+    void viewportChangeKeepsActiveWork_data()
     {
         QTest::addColumn<int>("mode");
         QTest::newRow("preview parser") << 0;
         QTest::newRow("payload download") << 1;
         QTest::newRow("native import") << 2;
     }
-    void viewportMutationCancelsActiveWork()
+    void viewportChangeKeepsActiveWork()
     {
         QFETCH(int, mode);
         Fixture f;
@@ -1966,35 +2237,30 @@ private slots:
             QCOMPARE(f.host.imports.size(), 1);
             job = f.host.jobs.back().get();
         }
-        const auto area = f.entry->model->projectValue.viewport;
         f.entry->model->projectValue.viewport = polygon(true);
         f.host.stateChange(f.entry, StateChange::Viewport);
-        f.host.drainFirstState(false);
-        QVERIFY(!f.control<QPushButton>("dataDownload")->isEnabled());
-        if (job)
-            QVERIFY(job->cancelled);
-        if (mode == 1) {
-            QVERIFY(reply);
-            QCOMPARE(reply->error(), QNetworkReply::OperationCanceledError);
-            QTRY_COMPARE(finished.size(), 1);
-            QVERIFY(qvariant_cast<OpenSWMM::Data::PayloadResult>(finished.first().first()).cancelled);
-        }
-        f.entry->model->projectValue.viewport = area;
-        f.host.stateChange(f.entry, StateChange::Viewport);
         f.host.drain();
-        if (mode == 0)
+        QCoreApplication::processEvents(); // Deferred revision reconciliation.
+        if (job)
+            QVERIFY(!job->cancelled);
+        if (mode == 0) {
             job->complete();
-        else if (mode == 2) {
-            const auto status = f.control<QLabel>("dataStatus")->text();
+            QCOMPARE(f.rows(), 1);
+            f.select();
+            QTRY_VERIFY(f.control<QPushButton>("dataDownload")->isEnabled());
+        } else if (mode == 1) {
+            QVERIFY(payload->isRunning());
+            QVERIFY(reply);
+            QCOMPARE(reply->error(), QNetworkReply::NoError);
+            QCOMPARE(finished.size(), 0);
+        } else {
             TimeSeriesImportResult late;
             late.layerId = "late-layer";
             late.seriesCount = 1;
             f.host.importFinished(late);
-            QCOMPARE(f.control<QLabel>("dataStatus")->text(), status);
+            QVERIFY(f.control<QLabel>("dataStatus")->text().startsWith("Added 1 series"));
+            QCOMPARE(f.host.activeProgress(), 0);
         }
-        f.select();
-        QVERIFY(!f.control<QPushButton>("dataDownload")->isEnabled());
-        QCOMPARE(f.host.activeProgress(), 0);
     }
     /** @brief Selection waits for harmless queued tab/presentation revisions and recovers after delivery. */
     void queuedTabRevisionRestoresDownload_data()
@@ -2269,7 +2535,7 @@ private slots:
         QVERIFY(!f.hasOverlay());
         QVERIFY(!f.control<QPushButton>("dataExport")->isEnabled());
     }
-    /** @brief Canvas CRS changes rebase explicit polygon reviews but invalidate viewport reviews. */
+    /** @brief Canvas CRS changes rebase both reviews; only polygon graphics are redrawn. */
     void projectCrsChangeRespectsAreaMode()
     {
         Fixture f;
@@ -2290,7 +2556,8 @@ private slots:
         f.host.drain();
         QCOMPARE(f.rows(), 1);
         QVERIFY(f.hasOverlay());
-        QVERIFY(!f.control<QPushButton>("dataExport")->isEnabled());
+        f.select();
+        QTRY_VERIFY(f.control<QPushButton>("dataExport")->isEnabled());
     }
     /** @brief A broad session publication cannot rebase over its still-pending
      * same-revision IViewEvents source change. */

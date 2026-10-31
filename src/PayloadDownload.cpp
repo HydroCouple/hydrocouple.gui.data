@@ -751,7 +751,7 @@ public:
         const auto hostGuard = lifetime;
         progress.update(-1, QStringLiteral("Validate USGS observations"));
         if (!guard || !hostGuard || !running || token != generation) return;
-        auto *submittedJob = host->runJob(
+        auto *submittedJob = progress.runJob(
             QStringLiteral("Validate USGS observations"),
             [bytes, capturedRequest, site, parsed](Sdk::IJobContext &context) {
                 *parsed = decodePage(bytes, capturedRequest, site, context);
@@ -846,7 +846,7 @@ public:
         const auto hostGuard = lifetime;
         progress.update(-1, QStringLiteral("Prepare observation CSV"));
         if (!guard || !hostGuard || !running || token != generation) return;
-        auto *submittedJob = host->runJob(
+        auto *submittedJob = progress.runJob(
             QStringLiteral("Prepare observation CSV"),
             [rows, partial, failure](Sdk::IJobContext &context) {
                 const auto bytes = observationsCsv(rows, context);
@@ -947,7 +947,7 @@ public:
         // Transfer work is complete; the nested host job now owns measurable GDAL progress.
         progress.update(1., QStringLiteral("Downloads complete; cropping DEM to reviewed area"));
         if (!guard || !hostGuard || !running || token != generation) return;
-        auto *submittedJob = host->runJob(
+        auto *submittedJob = progress.runJob(
             QStringLiteral("Crop DEM to reviewed area"),
             [tiles, cutline, partial, error, metadata](Sdk::IJobContext &context) {
                 *error = cropRaster(tiles, cutline, partial, context, metadata.get());
@@ -1000,7 +1000,7 @@ public:
         const auto hostGuard = lifetime;
         progress.update(-1, QStringLiteral("Validate downloaded GeoTIFF"));
         if (!guard || !hostGuard || !running || token != generation) return;
-        auto *submittedJob = host->runJob(
+        auto *submittedJob = progress.runJob(
             QStringLiteral("Validate downloaded GeoTIFF"),
             [path, error, metadata](Sdk::IJobContext &context) {
                 *error = validateRaster(path, context, metadata.get());
@@ -1129,6 +1129,11 @@ bool PayloadDownload::start(const PayloadRequest &request, QString *error)
             d->nextItem();
     });
     return true;
+}
+void PayloadDownload::setToolRun(const QUuid &id)
+{
+    if (!isRunning())
+        d->progress.attachToolRun(id);
 }
 void PayloadDownload::cancel()
 {

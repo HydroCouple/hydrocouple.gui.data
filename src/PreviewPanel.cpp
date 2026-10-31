@@ -47,6 +47,7 @@
 #include <algorithm>
 #include <memory>
 #include <limits>
+#include <utility>
 
 namespace OpenSWMM::Data
 {
@@ -197,7 +198,15 @@ PreviewPanel::PreviewPanel(Sdk::ExtensionHost *host, QWidget *parent)
     periodForm->addRow(tr("Measurement"), mParameter);
     periodForm->addRow(tr("Values"), mInterval);
     periodForm->addRow(tr("Period (inclusive)"), dates);
+    mRecordPeriod = new QLabel(mPeriodControls);
+    mRecordPeriod->setObjectName("dataRecordPeriod");
+    mRecordPeriod->setTextFormat(Qt::PlainText);
+    mRecordPeriod->setWordWrap(true);
+    periodForm->addRow(QString(), mRecordPeriod);
     layout->addWidget(mPeriodControls);
+    mPeriodTimer = new QTimer(this);
+    mPeriodTimer->setSingleShot(true);
+    mPeriodTimer->setInterval(300);
     mDownload = new QPushButton(tr("Download selected observations…"), this);
     mDownload->setObjectName("dataDownload");
     mDownload->setToolTip(tr("Choose a folder and download actual data for the selected rows."));
@@ -282,8 +291,35 @@ PreviewPanel::PreviewPanel(Sdk::ExtensionHost *host, QWidget *parent)
     connect(mDownload, &QPushButton::clicked, this, &PreviewPanel::downloadSelection);
     for (auto *date : {mStartDate, mEndDate})
         connect(date, &QDateEdit::dateChanged, this, [this]() { setBusy(mBusy); });
-    connect(mParameter, &QComboBox::currentTextChanged, this, [this]() { setBusy(mBusy); });
-    connect(mInterval, &QComboBox::currentIndexChanged, this, [this]() { setBusy(mBusy); });
+    connect(mParameter, &QComboBox::currentTextChanged, this, [this]() {
+        setBusy(mBusy);
+        schedulePeriodLookup();
+    });
+    connect(mInterval, &QComboBox::currentIndexChanged, this, [this]() {
+        setBusy(mBusy);
+        schedulePeriodLookup();
+    });
+    connect(mPeriodTimer, &QTimer::timeout, this, [this]() {
+        QStringList ids;
+        for (const auto &item : selectedItems())
+            ids.append(item.id);
+        ids.sort();
+        ids.removeDuplicates();
+        const auto code = parameterCode();
+        if (ids.isEmpty() || code.isEmpty())
+            return;
+        if (ids.size() > 500) {
+            clearPeriodLimits(tr("Select at most 500 sites to check their published record."));
+            return;
+        }
+        QList<QStringList> chunks;
+        for (qsizetype i = 0; i < ids.size(); i += 50)
+            chunks.append(ids.mid(i, 50));
+        const bool daily = mInterval->currentIndex() == 0;
+        const auto first = chunks.takeFirst();
+        requestPeriod(recordPeriodUrl(first, code, daily), code, daily, chunks, {}, 0,
+                      int(ids.size()));
+    });
     connect(mTable->selectionModel(), &QItemSelectionModel::selectionChanged, this, [this]() {
         if (!mFiltering) {
             const QPointer<PreviewPanel> self(this);
@@ -292,6 +328,8 @@ PreviewPanel::PreviewPanel(Sdk::ExtensionHost *host, QWidget *parent)
                 return;
             updateCounts();
             updateOverlay();
+            if (self)
+                schedulePeriodLookup();
         }
     });
     connect(mTable->selectionModel(), &QItemSelectionModel::currentChanged, this, [this]() {
@@ -324,7 +362,27 @@ PreviewPanel::PreviewPanel(Sdk::ExtensionHost *host, QWidget *parent)
         setBusy(false);
         if (mClosing)
             return;
+        const QPointer<PreviewPanel> self(this);
+        for (const auto &path : result.paths) {
+            addDownloadResult({Sdk::ToolResultKind::File, QFileInfo(path).fileName(), {}, path});
+            if (!self)
+                return;
+        }
+        if (!result.manifestPath.isEmpty())
+            addDownloadResult({Sdk::ToolResultKind::File, tr("Transfer manifest"), {}, result.manifestPath});
+        if (!self)
+            return;
+        if (!result.descriptorPath.isEmpty())
+            addDownloadResult({Sdk::ToolResultKind::File, tr("Time-series import descriptor"), {},
+                               result.descriptorPath});
+        if (!self)
+            return;
+        addDownloadResult({Sdk::ToolResultKind::Value, tr("Observations"),
+                           QString::number(result.observationCount)});
+        if (!self)
+            return;
         QString message;
+        bool importWarnings = false;
         if (result.cancelled)
             message = tr("Download cancelled.");
         else if (!result.error.isEmpty())
@@ -343,7 +401,6 @@ PreviewPanel::PreviewPanel(Sdk::ExtensionHost *host, QWidget *parent)
         if (!result.cancelled && result.error.isEmpty() && !result.descriptorPath.isEmpty() &&
             importObservations(result))
             return;
-        const QPointer<PreviewPanel> self(this);
         if (!result.cancelled && result.error.isEmpty() && !result.rasterPaths.isEmpty() &&
             mValid && mHostLifetime && mModelLifetime && mProject && displayIsCurrent() &&
             validateReview()) {
@@ -351,6 +408,7 @@ PreviewPanel::PreviewPanel(Sdk::ExtensionHost *host, QWidget *parent)
             const auto session = mSessionId;
             const auto load = mLoadGeneration;
             OperationProgress import(mHost, this);
+            import.attachToolRun(mDownloadRun);
             import.begin(tr("Add downloaded DEM layer"));
             if (!self || !mHostLifetime) return;
             int added = 0;
@@ -373,21 +431,36 @@ PreviewPanel::PreviewPanel(Sdk::ExtensionHost *host, QWidget *parent)
                     failures.append(error);
                 } else {
                     ++added;
+                    addDownloadResult({Sdk::ToolResultKind::Layer, QFileInfo(path).completeBaseName(),
+                                       {}, path, id, session});
+                    if (!self)
+                        return;
                 }
                 // The accepted batch contains immutable validated files. Each import still
                 // targets the same Ready model; no new review revision is granted here.
             }
+            importWarnings = added != result.rasterPaths.size();
+            if (importWarnings)
+                message += tr("\nSaved, not added: one or more DEM layers could not be attached.");
             import.finish(added == result.rasterPaths.size() ? Sdk::ProgressOutcome::Succeeded
                            : failures.isEmpty() ? Sdk::ProgressOutcome::Cancelled
                                                 : Sdk::ProgressOutcome::Failed,
                           tr("Added %1 DEM layers. Downloaded files retained. %2")
                               .arg(added).arg(failures.join("; ")));
+        } else if (!result.cancelled && result.error.isEmpty() && !result.rasterPaths.isEmpty()) {
+            importWarnings = true;
+            message += tr("\nSaved, not added: the original model is unavailable.");
         }
         if (!self)
             return;
         if (!result.manifestPath.isEmpty() && !result.error.isEmpty())
             message += tr("\nCompleted files and transfer details: %1").arg(result.manifestPath);
         mStatus->setText(message);
+        const auto outcome = result.cancelled ? Sdk::ToolRunOutcome::Cancelled
+                             : !result.error.isEmpty() ? Sdk::ToolRunOutcome::Failed
+                             : result.partial || importWarnings
+                                 ? Sdk::ToolRunOutcome::Warning : Sdk::ToolRunOutcome::Succeeded;
+        finishDownloadRun(outcome, message);
     });
     updateControls();
     mStateSource = qobject_cast<Sdk::ISessionEvents *>(mHostLifetime.data());
@@ -420,15 +493,65 @@ PreviewPanel::PreviewPanel(Sdk::ExtensionHost *host, QWidget *parent)
     bindProject();
 }
 
+PreviewPanel::PreviewPanel(Sdk::ExtensionHost *host, Source source, QString toolId,
+                           QWidget *parent)
+    : PreviewPanel(host, parent)
+{
+    mToolId = std::move(toolId);
+    mToolPreviews = qobject_cast<Sdk::IToolPreviews *>(mHostLifetime.data());
+    mToolRuns = qobject_cast<Sdk::IToolRuns *>(mHostLifetime.data());
+    setObjectName("dataToolPanel." + mToolId);
+    mSource->setCurrentIndex(source == Source::Sites ? 0 : 1);
+    mSource->setEnabled(false);
+    mSource->hide();
+    if (auto *form = qobject_cast<QFormLayout *>(layout()->itemAt(0)->layout()))
+        if (auto *label = form->labelForField(mSource))
+            label->hide();
+}
+void PreviewPanel::clearOwnedPreview()
+{
+    if (!mHostLifetime)
+        return;
+    if (!mToolId.isEmpty() && mToolPreviews)
+        mToolPreviews->clearToolPreview(mSessionId, mToolId);
+    else if (mProject)
+        mProject->clearPreview();
+}
+QUuid PreviewPanel::previewAttachment(QList<qint64> *fids) const
+{
+    if (!mHostLifetime) {
+        if (fids)
+            fids->clear();
+        return {};
+    }
+    return !mToolId.isEmpty() && mToolPreviews
+               ? mToolPreviews->toolPreviewLayer(mSessionId, mToolId, fids)
+               : mPreviewLayers ? mPreviewLayers->previewLayer(mSessionId, fids) : QUuid{};
+}
+void PreviewPanel::finishDownloadRun(Sdk::ToolRunOutcome outcome, const QString &message)
+{
+    const auto id = std::exchange(mDownloadRun, QUuid{});
+    if (mHostLifetime && mToolRuns && !id.isNull())
+        mToolRuns->finishToolRun(id, outcome, message);
+}
+void PreviewPanel::addDownloadResult(const Sdk::ToolResult &result)
+{
+    if (mHostLifetime && mToolRuns && !mDownloadRun.isNull())
+        mToolRuns->addToolResult(mDownloadRun, result);
+}
+
 PreviewPanel::~PreviewPanel()
 {
     mClosing = true;
     cancel();
+    schedulePeriodLookup(); // Aborts a pending record lookup; nothing restarts while closing.
     if (mHostLifetime && mProject)
-        mProject->clearPreview();
+        clearOwnedPreview();
 }
 void PreviewPanel::setSource(Source source)
 {
+    if (!mToolId.isEmpty())
+        return;
     mSource->setCurrentIndex(source == Source::Sites ? 0 : 1);
 }
 void PreviewPanel::clearPreview()
@@ -455,13 +578,12 @@ void PreviewPanel::cancel()
     ++mGeneration;
     mPreviewProgress.finish(Sdk::ProgressOutcome::Cancelled, tr("Preview cancelled."));
     if (!self) return;
-    mImportProgress.finish(Sdk::ProgressOutcome::Cancelled,
-                           tr("Layer import cancelled; downloaded files are retained."));
-    if (!self) return;
     const bool cancellingImport = mImportPending;
+    mImportCancelRequested = cancellingImport;
+    if (!cancellingImport)
+        mImportProgress.finish(Sdk::ProgressOutcome::Cancelled,
+                                tr("Time-series layer import cancelled."));
     auto *importJob = mImportJob;
-    mImportJob = nullptr;
-    mImportPending = false;
     if (importJob && mHostLifetime)
         importJob->cancel();
     if (!self)
@@ -487,8 +609,9 @@ void PreviewPanel::cancel()
     if (self) {
         setBusy(false);
         if (cancellingImport && !mClosing)
-            mStatus->setText(
-                tr("Layer import cancelled. Downloaded observation files were retained."));
+            mStatus->setText(mToolId.isEmpty()
+                ? tr("Layer import cancelled. Downloaded observation files were retained.")
+                : tr("Cancelling layer import. Downloaded observation files are retained."));
     }
 }
 void PreviewPanel::setBusy(bool busy)
@@ -510,21 +633,157 @@ void PreviewPanel::setBusy(bool busy)
     mFeatures->setEnabled(open && polygon && !busy);
     mSelectedOnly->setEnabled(open && polygon && !busy);
     mDataset->setEnabled(!busy && mSource->currentIndex() == 1);
-    mSource->setEnabled(!busy);
+    mSource->setEnabled(!busy && mToolId.isEmpty());
     mAreaMode->setEnabled(!busy);
     mPeriodControls->setEnabled(!busy);
-    const QString code =
-        mParameter->currentText() == mParameter->itemText(mParameter->currentIndex())
-            ? mParameter->currentData().toString()
-            : mParameter->currentText().trimmed();
-    bool validCode = code.size() == 5;
-    for (const auto character : code)
-        validCode = validCode && character >= QLatin1Char('0') && character <= QLatin1Char('9');
+    const bool validCode = !parameterCode().isEmpty();
     const bool periodValid = mStartDate->date().isValid() && mEndDate->date().isValid() &&
                              mStartDate->date() <= mEndDate->date();
     mDownload->setEnabled(open && !busy && mValid && !mAwaitingDisplayRevision &&
                           !selectedItems().isEmpty() &&
                           (mSource->currentIndex() == 1 || (periodValid && validCode)));
+}
+QString PreviewPanel::parameterCode() const
+{
+    const QString code =
+        mParameter->currentText() == mParameter->itemText(mParameter->currentIndex())
+            ? mParameter->currentData().toString()
+            : mParameter->currentText().trimmed();
+    if (code.size() != 5)
+        return {};
+    for (const auto character : code)
+        if (character < QLatin1Char('0') || character > QLatin1Char('9'))
+            return {};
+    return code;
+}
+void PreviewPanel::schedulePeriodLookup()
+{
+    ++mPeriodGeneration;
+    mPeriodTimer->stop();
+    const auto reply = mPeriodReply;
+    mPeriodReply = nullptr;
+    if (reply) {
+        disconnect(reply, nullptr, this, nullptr);
+        reply->abort();
+        if (reply)
+            reply->deleteLater();
+    }
+    if (mClosing)
+        return;
+    const bool lookup = mSource->currentIndex() == 0 && !parameterCode().isEmpty() &&
+                        !selectedItems().isEmpty();
+    clearPeriodLimits(lookup ? tr("Checking the published record…") : QString{});
+    if (lookup)
+        mPeriodTimer->start();
+}
+void PreviewPanel::requestPeriod(const QUrl &url, const QString &code, bool daily,
+                                 QList<QStringList> remaining, RecordPeriod period, int pages,
+                                 int selected)
+{
+    if (mClosing || !mHostLifetime)
+        return;
+    const auto generation = mPeriodGeneration;
+    QNetworkRequest networkRequest(url);
+    networkRequest.setTransferTimeout(30000);
+    networkRequest.setRawHeader("Accept", "application/json");
+    networkRequest.setRawHeader("User-Agent", "OpenSWMM-Data/0.1");
+    const QPointer<PreviewPanel> self(this);
+    const auto hostLifetime = mHostLifetime;
+    auto *reply = mHost->network()->shared()->get(networkRequest);
+    if (!self || !hostLifetime || generation != mPeriodGeneration) {
+        if (hostLifetime && reply) {
+            const QPointer<QNetworkReply> response(reply);
+            reply->abort();
+            if (response)
+                response->deleteLater();
+        }
+        return;
+    }
+    mPeriodReply = reply;
+    auto exceeded = std::make_shared<bool>(false);
+    connect(reply, &QNetworkReply::readyRead, this, [reply, exceeded]() {
+        if (reply->bytesAvailable() > maxResponse) {
+            *exceeded = true;
+            reply->abort();
+        }
+    });
+    connect(reply, &QNetworkReply::finished, this,
+            [this, reply, generation, url, code, daily, remaining, period, pages, selected,
+             exceeded]() mutable {
+                reply->deleteLater();
+                if (generation != mPeriodGeneration || mClosing)
+                    return;
+                mPeriodReply = nullptr;
+                QString error;
+                QJsonObject document;
+                const auto bytes = reply->readAll();
+                if (*exceeded || bytes.size() > maxResponse)
+                    error = tr("the record listing exceeds the size limit");
+                else if (reply->error() != QNetworkReply::NoError)
+                    error = reply->errorString();
+                else {
+                    QJsonParseError parsed;
+                    document = QJsonDocument::fromJson(bytes, &parsed).object();
+                    if (parsed.error != QJsonParseError::NoError)
+                        error = parsed.errorString();
+                }
+                if (error.isEmpty())
+                    mergeRecordPeriod(document, code, daily, &period, &error);
+                QUrl next;
+                for (const auto &link : document["links"].toArray())
+                    if (link.toObject()["rel"].toString() == "next")
+                        next = QUrl(link.toObject()["href"].toString());
+                if (error.isEmpty() && !next.isEmpty() &&
+                    (pages + 1 >= 40 || next.scheme() != "https" || next.host() != url.host()))
+                    error = tr("the record listing has too many pages");
+                if (!error.isEmpty()) {
+                    clearPeriodLimits(tr("Published record unknown: %1.").arg(error));
+                    return;
+                }
+                if (!next.isEmpty()) {
+                    requestPeriod(next, code, daily, remaining, period, pages + 1, selected);
+                } else if (!remaining.isEmpty()) {
+                    const auto chunk = remaining.takeFirst();
+                    requestPeriod(recordPeriodUrl(chunk, code, daily), code, daily, remaining,
+                                  period, pages + 1, selected);
+                } else
+                    applyPeriod(period, selected);
+            });
+}
+void PreviewPanel::applyPeriod(const RecordPeriod &period, int selected)
+{
+    if (period.sites.isEmpty()) {
+        clearPeriodLimits(
+            tr("No %1 are published for this measurement at the selected sites.")
+                .arg(mInterval->currentIndex() == 0 ? tr("daily values")
+                                                    : tr("continuous measurements")));
+        return;
+    }
+    auto from = mStartDate->date(), to = mEndDate->date();
+    if (to < period.begin || from > period.end) {
+        to = period.end;
+        from = qMax(period.begin, period.end.addDays(-30));
+    } else {
+        from = qBound(period.begin, from, period.end);
+        to = qBound(period.begin, to, period.end);
+    }
+    for (auto *date : {mStartDate, mEndDate})
+        date->setDateRange(period.begin, period.end);
+    mStartDate->setDate(from);
+    mEndDate->setDate(to);
+    mRecordPeriod->setText(tr("Published record: %1 to %2 (%3 of %4 selected sites).")
+                               .arg(period.begin.toString(Qt::ISODate),
+                                    period.end.toString(Qt::ISODate))
+                               .arg(period.sites.size())
+                               .arg(selected));
+}
+void PreviewPanel::clearPeriodLimits(const QString &note)
+{
+    for (auto *date : {mStartDate, mEndDate}) {
+        date->clearMinimumDate();
+        date->clearMaximumDate();
+    }
+    mRecordPeriod->setText(note);
 }
 void PreviewPanel::updateControls()
 {
@@ -561,7 +820,7 @@ void PreviewPanel::invalidate(const QString &message, bool retainDisplay)
     if (!self)
         return;
     if (!retainDisplay && mHostLifetime && mModelLifetime && mProject)
-        mProject->clearPreview();
+        clearOwnedPreview();
     if (!self)
         return;
     updateAttributes();
@@ -572,6 +831,7 @@ void PreviewPanel::invalidate(const QString &message, bool retainDisplay)
         updateOverlay();
     if (!self)
         return;
+    schedulePeriodLookup();
     mExport->setEnabled(false);
     if (!message.isEmpty())
         mStatus->setText(message);
@@ -773,10 +1033,6 @@ bool PreviewPanel::captureContext(ReviewContext *result, QString *error) const
     context.polygon = polygon;
     context.metadata = {{"inputPath", before.session.inputPath},
                         {"projectPath", before.session.projectPath}};
-    if (!polygon)
-        context.metadata["projectCrs"] = project->crsWkt();
-    if (!alive())
-        return false;
     if (polygon) {
         if (!chosen || attachment.isNull())
             return refuse(tr("Choose a loaded polygon layer and boundary feature."));
@@ -836,7 +1092,9 @@ bool PreviewPanel::captureContext(ReviewContext *result, QString *error) const
             return refuse(tr("The boundary selection changed during capture."));
         context.selectionHash = hash.result();
         context.area = project->boundaryPolygon(layerId, featureId, error);
-    } else
+    } else if (!mReview.sessionId.isNull() && !mReview.polygon)
+        context.area = mReview.area; // Preview froze the viewport; later pans and resizes keep it.
+    else
         context.area = project->viewportBoundary(error);
     if (!alive())
         return false;
@@ -931,37 +1189,13 @@ void PreviewPanel::stateChanged(const Sdk::StateEvent &event)
     }
     if (event.sequence > mReview.sequence && event.kind == StateEventKind::StateChanged &&
         event.changes.testFlag(StateChange::Viewport)) {
-        if (mAreaMode->currentIndex() == 0) {
-            if (mValid && mHasDisplay && !mBusy && !mJob && !mImportPending &&
-                !(mPayload && mPayload->isRunning())) {
-                // Ribbon/dock layouts can resize and restore the canvas in one
-                // publication turn. Suspend completed-review writes immediately,
-                // then reconcile the final area with qualified revision evidence.
-                // A genuinely different final area still loses authority below.
-                mAwaitingDisplayRevision = true;
-                setBusy(mBusy);
-            } else {
-                const auto generation = mGeneration;
-                ReviewContext current;
-                const bool captured = mValid && captureContext(&current);
-                if (!self || generation != mGeneration)
-                    return;
-                const bool unchanged = captured && sameContent(mReview, current);
-                if (!unchanged) {
-                    invalidate(tr("The viewport changed. Showing the previous preview; "
-                                  "preview again before saving features."),
-                               true);
-                    return;
-                }
-            }
-        } else {
-            // The frozen polygon stays authoritative, but its transient graphics
-            // need reprojection after a canvas CRS change. The public viewport
-            // category also includes panning, so refresh once after safe rebasing.
+        // Both area modes freeze the reviewed geometry at Preview, so panning,
+        // zooming, layout resizes and canvas CRS changes keep the review. A frozen
+        // polygon's transient graphics are refreshed once after safe rebasing.
+        if (mAreaMode->currentIndex() == 1)
             mOverlayRefreshPending = mOverlayRefreshPending || mValid;
-            if (!mValid && mHasDisplay)
-                updateOverlay();
-        }
+        if (!mValid && mHasDisplay)
+            updateOverlay();
         if (!self)
             return;
     }
@@ -1006,7 +1240,7 @@ void PreviewPanel::viewChanged(const Sdk::ViewEvent &event)
         refreshLayers();
     if (self && event.kind == ViewEventKind::LayerSelectionChanged &&
         !event.layerSessionId.isNull() &&
-        event.layerSessionId == mPreviewLayers->previewLayer(mSessionId))
+        event.layerSessionId == previewAttachment())
         pullNativeSelection();
     if (self)
         observeRevision(event.session);
@@ -1057,8 +1291,18 @@ bool PreviewPanel::beginPreview()
     setBusy(true);
     if (!self || generation != mGeneration)
         return false;
+    if (!mToolId.isEmpty())
+        mPreviewProgress.configureToolRun(
+            {mToolId, {}, tr("Reviewed area, %1 catalogue").arg(source == Source::Sites
+                             ? tr("USGS") : tr("3DEP")), mSessionId, mLoadGeneration},
+            [this] { cancel(); });
     mPreviewProgress.begin(source == Source::Sites ? tr("USGS site preview") : tr("DEM footprint preview"));
     if (!self || !mHostLifetime || generation != mGeneration) return false;
+    if (mToolRuns && mPreviewProgress.toolRunId().isNull()) {
+        setBusy(false);
+        mStatus->setText(tr("The preview run could not be started."));
+        return false;
+    }
     mPreviewProgress.update(-1, tr("Finding available sites or tiles"));
     if (!self || !mHostLifetime || generation != mGeneration) return false;
     mStatus->setText(tr("Finding available sites or tiles…"));
@@ -1271,7 +1515,7 @@ void PreviewPanel::parse(const QByteArray &bytes, bool cache)
     const auto hostLifetime = mHostLifetime;
     mPreviewProgress.update(-1, tr("Filtering catalogue to the reviewed area"));
     if (!self || !hostLifetime || generation != mGeneration) return;
-    auto *job = mHost->runJob(
+    auto *job = mPreviewProgress.runJob(
         tr("Filter catalogue preview"),
         [bytes, area, source, result](Sdk::IJobContext &job) {
             QJsonParseError error;
@@ -1405,9 +1649,33 @@ void PreviewPanel::apply(const QList<Item> &items, bool more)
                     : QString{}));
     if (self && generation == mGeneration)
         filterResults();
+    // Native preview publication can defer write eligibility until its detailed
+    // events arrive. Clear still becomes available as soon as display is adopted.
     if (self && generation == mGeneration)
+        setBusy(mBusy);
+    if (self && generation == mGeneration) {
+        mPreviewProgress.addResult({Sdk::ToolResultKind::Value, tr("Catalogue records"),
+                                   QString::number(items.size())});
+        if (!self || generation != mGeneration)
+            return;
+        const auto attachment = previewAttachment();
+        if (mToolRuns && mViewSource && !attachment.isNull()) {
+            const auto snapshot = mViewSource->viewSnapshot(mSessionId);
+            if (!self || generation != mGeneration)
+                return;
+            for (const auto &layer : snapshot.layers)
+                if (layer.layerSessionId == attachment) {
+                    mPreviewProgress.addResult({Sdk::ToolResultKind::Layer, layer.title, {}, {},
+                                               layer.layerId, mSessionId, attachment,
+                                               mLoadGeneration});
+                    break;
+                }
+        }
+        if (!self || generation != mGeneration)
+            return;
         mPreviewProgress.finish(Sdk::ProgressOutcome::Succeeded,
                                 tr("%1 results in the reviewed area.").arg(items.size()));
+    }
 }
 QList<Item> PreviewPanel::selectedItems() const
 {
@@ -1465,6 +1733,8 @@ void PreviewPanel::filterResults()
         return;
     updateCounts();
     updateOverlay();
+    if (self)
+        schedulePeriodLookup(); // Downloads use only the visible selected rows.
 }
 void PreviewPanel::updateCounts()
 {
@@ -1479,7 +1749,7 @@ void PreviewPanel::pullNativeSelection()
         return;
     const QPointer<PreviewPanel> self(this);
     QList<qint64> fids;
-    const auto attachment = mPreviewLayers->previewLayer(mSessionId, &fids);
+    const auto attachment = previewAttachment(&fids);
     if (!self || attachment.isNull() || fids.size() != mPublished.size())
         return;
     const auto native = mViewControls->selectedLayerFeatures(mSessionId, attachment, 0, 5000);
@@ -1524,7 +1794,7 @@ void PreviewPanel::pushNativeSelection()
         return;
     const QPointer<PreviewPanel> self(this);
     QList<qint64> fids;
-    const auto attachment = mPreviewLayers->previewLayer(mSessionId, &fids);
+    const auto attachment = previewAttachment(&fids);
     if (!self || attachment.isNull() || fids.size() != mPublished.size())
         return;
     QSet<int> chosen;
@@ -1659,7 +1929,10 @@ void PreviewPanel::updateOverlay()
             QJsonObject{{"asFeatureLayer", true}, {"title", tr("DEM tiles (preview)")}};
     }
     QString error;
-    const bool shown = mProject->showPreview(collection, &error);
+    const bool shown = !mToolId.isEmpty() && mToolPreviews
+                           ? mToolPreviews->showToolPreview(mSessionId, mLoadGeneration,
+                                                           mToolId, collection, &error)
+                           : mProject->showPreview(collection, &error);
     if (!shown)
         if (self)
             mStatus->setText(error);
@@ -1709,6 +1982,7 @@ bool PreviewPanel::importObservations(const PayloadResult &result)
             tr("Observations saved, not added. Reopen the saved import descriptor in a ready project: %1")
                 .arg(result.descriptorPath));
         mImportProgress.log("warning", mStatus->text());
+        finishDownloadRun(Sdk::ToolRunOutcome::Warning, mStatus->text());
         return true;
     }
     Sdk::TimeSeriesImportRequest request;
@@ -1720,6 +1994,8 @@ bool PreviewPanel::importObservations(const PayloadResult &result)
     const auto generation = mGeneration;
     const QPointer<PreviewPanel> self(this);
     mImportPending = true;
+    mImportCancelRequested = false;
+    mImportProgress.attachToolRun(mDownloadRun);
     mImportProgress.begin(tr("Add downloaded time-series layer"));
     if (!self || !mHostLifetime || generation != mGeneration) return true;
     // The host import job owns preparation progress after this handoff.
@@ -1728,14 +2004,28 @@ bool PreviewPanel::importObservations(const PayloadResult &result)
     setBusy(true);
     mStatus->setText(tr("Observations saved. Adding time-series layer…"));
     QString error;
-    auto *job = mTimeSeriesLayers->importTimeSeries(
-        request, this,
-        [self, generation, folder](const Sdk::TimeSeriesImportResult &imported) {
-            if (!self || self->mClosing || self->mGeneration != generation)
+    const auto finished = [self, generation, folder](const Sdk::TimeSeriesImportResult &imported) {
+            if (!self || self->mClosing ||
+                (self->mGeneration != generation && !self->mImportCancelRequested))
                 return;
+            const bool cancelled = self->mImportCancelRequested || imported.cancelled;
             self->mImportJob = nullptr;
             self->mImportPending = false;
+            self->mImportCancelRequested = false;
             self->setBusy(false);
+            if (cancelled) {
+                const auto message = tr("Layer import cancelled. Downloaded observation files were retained.");
+                self->mStatus->setText(message);
+                if (!imported.packagePath.isEmpty() && QFileInfo::exists(imported.packagePath))
+                    self->addDownloadResult({Sdk::ToolResultKind::File, tr("Retained native dataset"),
+                                             {}, imported.packagePath});
+                if (!self)
+                    return;
+                self->mImportProgress.finish(Sdk::ProgressOutcome::Cancelled, message);
+                if (self)
+                    self->finishDownloadRun(Sdk::ToolRunOutcome::Cancelled, message);
+                return;
+            }
             if (!imported.layerId.isEmpty())
                 self->mStatus->setText(
                     tr("Added %1 series to Layers. Right-click the layer to plot or use in model. Files: %2")
@@ -1750,8 +2040,22 @@ bool PreviewPanel::importObservations(const PayloadResult &result)
                                          : imported.layerId.isEmpty() ? Sdk::ProgressOutcome::Failed
                                                                        : Sdk::ProgressOutcome::Succeeded,
                                          self->mStatus->text());
-        },
-        &error);
+            if (!self)
+                return;
+            if (!imported.layerId.isEmpty())
+                self->addDownloadResult({Sdk::ToolResultKind::Layer, tr("Time Series collection"),
+                                         tr("%1 series").arg(imported.seriesCount), imported.packagePath,
+                                         imported.layerId, self->mSessionId});
+            if (!self)
+                return;
+            self->finishDownloadRun(imported.cancelled ? Sdk::ToolRunOutcome::Cancelled
+                                     : imported.layerId.isEmpty() ? Sdk::ToolRunOutcome::Warning
+                                                                  : Sdk::ToolRunOutcome::Succeeded,
+                                     self->mStatus->text());
+        };
+    auto *job = mToolRuns && !mDownloadRun.isNull()
+                    ? mToolRuns->importToolTimeSeries(mDownloadRun, request, this, finished, &error)
+                    : mTimeSeriesLayers->importTimeSeries(request, this, finished, &error);
     if (!self)
         return true;
     if (generation != mGeneration) {
@@ -1766,6 +2070,7 @@ bool PreviewPanel::importObservations(const PayloadResult &result)
             setBusy(false);
             mStatus->setText(tr("Observations saved, not added: %1\nFiles: %2").arg(error, folder));
             mImportProgress.finish(Sdk::ProgressOutcome::Failed, mStatus->text());
+            finishDownloadRun(Sdk::ToolRunOutcome::Warning, mStatus->text());
         }
     }
     return true;
@@ -1804,10 +2109,33 @@ void PreviewPanel::downloadTo(const QString &directory)
                                      {"sessionId", mSessionId.toString(QUuid::WithoutBraces)}};
     QString error;
     const QPointer<PreviewPanel> self(this);
+    if (mToolRuns && !mToolId.isEmpty()) {
+        const Sdk::ToolRunRequest run{
+            mToolId, tr("Download"), tr("%1 selected records, %2 to %3")
+                .arg(selected.size()).arg(request.from.toString(Qt::ISODate),
+                                           request.to.toString(Qt::ISODate)),
+            mSessionId, mLoadGeneration};
+        const auto generation = mGeneration;
+        const auto id = mToolRuns->beginToolRun(run, this, [this] { cancel(); });
+        if (!self || !mHostLifetime)
+            return;
+        if (generation != mGeneration) {
+            if (!id.isNull())
+                mToolRuns->finishToolRun(id, Sdk::ToolRunOutcome::Cancelled, tr("Cancelled while starting."));
+            return;
+        }
+        mDownloadRun = id;
+        if (mDownloadRun.isNull()) {
+            mStatus->setText(tr("The download run could not be started."));
+            return;
+        }
+    }
+    mPayload->setToolRun(mDownloadRun);
     const bool started = mPayload->start(request, &error);
     if (!self) return;
     if (!started) {
         mStatus->setText(error);
+        finishDownloadRun(Sdk::ToolRunOutcome::Failed, error);
         return;
     }
     setBusy(true);

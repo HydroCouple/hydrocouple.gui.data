@@ -9,6 +9,7 @@
  * @license GPL-3.0-or-later
  */
 #include "Catalog.hpp"
+#include <QDateTime>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QSet>
@@ -175,5 +176,48 @@ QJsonObject featureCollection(const QList<Item> &items)
                                     {"properties", catalogueProperties(item)}});
     }
     return {{"type", "FeatureCollection"}, {"features", features}};
+}
+QUrl recordPeriodUrl(const QStringList &siteIds, const QString &parameterCode, bool daily)
+{
+    QUrl url("https://api.waterdata.usgs.gov/ogcapi/v1/collections/time-series-metadata/items");
+    QUrlQuery query;
+    query.addQueryItem("monitoring_location_id", siteIds.join(','));
+    query.addQueryItem("parameter_code", parameterCode);
+    query.addQueryItem("computation_period_identifier", daily ? "Daily" : "Points");
+    query.addQueryItem("limit", "1000");
+    query.addQueryItem("f", "json");
+    url.setQuery(query);
+    return url;
+}
+bool mergeRecordPeriod(const QJsonObject &document, const QString &parameterCode, bool daily,
+                       RecordPeriod *period, QString *error)
+{
+    if (document["type"].toString() != "FeatureCollection" || !document["features"].isArray()) {
+        if (error)
+            *error = QStringLiteral("The record listing is not a feature collection.");
+        return false;
+    }
+    const auto interval = daily ? QStringLiteral("Daily") : QStringLiteral("Points");
+    for (const auto &value : document["features"].toArray()) {
+        const auto properties = value.toObject()["properties"].toObject();
+        const auto site = properties["monitoring_location_id"].toString();
+        const auto begin = QDateTime::fromString(properties["begin"].toString(), Qt::ISODate);
+        const auto end = QDateTime::fromString(properties["end"].toString(), Qt::ISODate);
+        if (site.isEmpty() || properties["parameter_code"].toString() != parameterCode ||
+            properties["computation_period_identifier"].toString() != interval ||
+            !begin.isValid() || !end.isValid() || end < begin)
+            continue;
+        // Observation requests name UTC days, so the record is compared in UTC too.
+        const auto first = begin.toUTC().date(), last = end.toUTC().date();
+        if (!period->begin.isValid() || first < period->begin)
+            period->begin = first;
+        if (!period->end.isValid() || last > period->end)
+            period->end = last;
+        if (!period->sites.contains(site)) {
+            period->sites.append(site);
+            period->sites.sort();
+        }
+    }
+    return true;
 }
 }

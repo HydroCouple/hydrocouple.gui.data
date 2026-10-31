@@ -7,6 +7,10 @@ version, not evidence of a release tag.
 
 ## [Unreleased]
 
+- Require GUI SDK 1.11 and expose USGS and elevation as independent tagged Analysis Toolbox tools, with separate previews, dockable panels, timestamped run history, results and cancellation.
+- Make the Data ribbon optional: choose Toolbox only (default), a shared Data tab or a separate Data tab in extension preferences.
+- Freeze a viewport preview's area at Preview, as for polygons: panning, zooming, map resizes and canvas CRS changes no longer disable Download or export, or cancel pending work. Preview again to search a new view.
+- Limit the USGS download period to the union of the selected sites' published records for the chosen measurement and interval, pulling the chosen dates inside it.
 - Require GUI SDK 1.9, whose interfaces use descriptive names (`IModelEvents`, `ISessionEvents`, `IViewEvents`, `IActivityEvents`, `IViewControls`, `IProgress`, `ITimeSeriesLayers`, `IPreviewLayers`) instead of V-number suffixes.
 - Share preview selection with the map: the select tool and native attribute table select Data rows, and Data rows select native preview features. DEM tile footprints now use the selectable native preview layer. Requires GUI SDK 1.8.
 - Require SDK 1.7 and automatically add completed USGS observations as native time-series layers, with retained station geometry and provenance.

@@ -5,7 +5,7 @@ project(OpenSWMMData VERSION 0.1.0 LANGUAGES CXX)
 if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build configuration" FORCE)
 endif()
-find_package(OpenSWMMVisSdk 1.9 CONFIG REQUIRED)
+find_package(OpenSWMMVisSdk 1.11 CONFIG REQUIRED)
 find_package(GDAL REQUIRED)
 find_package(Qt6 REQUIRED COMPONENTS Svg)
 openswmmvis_add_extension(openswmm_data
