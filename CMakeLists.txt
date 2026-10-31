@@ -5,7 +5,22 @@ project(OpenSWMMData VERSION 0.1.0 LANGUAGES CXX)
 if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build configuration" FORCE)
 endif()
-find_package(OpenSWMMVisSdk 1.12 CONFIG REQUIRED)
+# Reuse the exact host SDK during a GUI source build. An independently configured
+# plugin still consumes the installed package, including its compatibility checks.
+if(TARGET OpenSWMMVis::Sdk)
+    if(NOT COMMAND openswmmvis_add_extension OR
+       NOT EXISTS "${OpenSWMMVisSdk_MANIFEST}")
+        message(FATAL_ERROR "The parent SDK must provide openswmmvis_add_extension and OpenSWMMVisSdk_MANIFEST")
+    endif()
+    file(READ "${OpenSWMMVisSdk_MANIFEST}" _openswmm_data_sdk_manifest)
+    string(JSON _openswmm_data_sdk_api GET "${_openswmm_data_sdk_manifest}" sdkApiVersion)
+    if(_openswmm_data_sdk_api VERSION_LESS "1.12" OR
+       NOT _openswmm_data_sdk_api VERSION_LESS "2.0")
+        message(FATAL_ERROR "OpenSWMM Data requires GUI SDK 1.12 or a compatible later 1.x API")
+    endif()
+else()
+    find_package(OpenSWMMVisSdk 1.12 CONFIG REQUIRED)
+endif()
 find_package(GDAL REQUIRED)
 find_package(Qt6 REQUIRED COMPONENTS Svg)
 openswmmvis_add_extension(openswmm_data
@@ -19,7 +34,8 @@ openswmmvis_add_extension(openswmm_data
             resources/openswmm_data_icons.qrc)
 set_target_properties(openswmm_data PROPERTIES AUTORCC ON)
 target_link_libraries(openswmm_data PRIVATE GDAL::GDAL Qt6::Svg)
-option(OPENSWMM_DATA_BUILD_TESTS "Build offline catalogue/geometry checks" ON)
+# Source consumers opt into these tests; a standalone Data build keeps them on.
+option(OPENSWMM_DATA_BUILD_TESTS "Build offline catalogue/geometry checks" ${PROJECT_IS_TOP_LEVEL})
 if(OPENSWMM_DATA_BUILD_TESTS)
     find_package(Qt6 REQUIRED COMPONENTS Test)
     enable_testing()
@@ -86,7 +102,12 @@ endif()
 # Use the same docs/ working directory and HTML layout as the GUI.
 find_package(Doxygen QUIET)
 if(DOXYGEN_FOUND)
-    add_custom_target(doc
+    if(PROJECT_IS_TOP_LEVEL)
+        set(_openswmm_data_doc_target doc)
+    else()
+        set(_openswmm_data_doc_target openswmm_data_doc)
+    endif()
+    add_custom_target(${_openswmm_data_doc_target}
         COMMAND "${DOXYGEN_EXECUTABLE}" Doxyfile
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/docs"
         COMMENT "Generate the themed Data Sources reference"

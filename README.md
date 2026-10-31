@@ -1,7 +1,8 @@
 # OpenSWMM Data Sources
 
-An independently built native plugin for `openswmm.gui`, consuming the installed
-GUI SDK 1.12, matching Qt with Qt SVG, and GDAL. The SDK and plugin host remain in the GUI repo.
+A native plugin for `openswmm.gui`, built with the GUI or independently using the
+installed GUI SDK 1.12, matching Qt with Qt SVG, and GDAL. The SDK and plugin host
+remain in the GUI repo.
 
 The source repository is [HydroCouple/hydrocouple.gui.data](https://github.com/HydroCouple/hydrocouple.gui.data).
 The plugin identity remains `openswmm.gui.data`; the hosted repository name does
@@ -39,6 +40,13 @@ runs across tools with their start/end timestamps and elapsed time. Saved files
 and layer references remain available for inspection after a panel is hidden.
 History lasts for the current GUI session. Completed download folders and their
 manifests remain available after restart.
+
+When included in the GUI's CMake build, the plugin uses that build's SDK target
+and compatibility manifest; a separate SDK installation is not needed. The GUI
+controls deployment into its plugin search folder and installer. Data tests
+default to off when embedded; set `OPENSWMM_DATA_BUILD_TESTS=ON` to enable them.
+The embedded documentation target is `openswmm_data_doc`, leaving the GUI's `doc`
+target available. Standalone builds retain tests by default and the `doc` target.
 
 ```sh
 cmake -S . -B build \
@@ -86,7 +94,7 @@ limited to the selected sites' published record. An empty response does not impl
 zero flow.
 Use **Details and advanced options** for the full saved-property table and filters.
 All new C++ interfaces and source files use Doxygen comments. The plugin requires
-SDK 1.11 toolbox, shared ribbon, tool-run history, independent tool previews, typed lifecycle, view, UI activity, native time-series import, shared
+SDK 1.12 rainfall metadata, toolbox, shared ribbon, tool-run history, independent tool previews, typed lifecycle, view, UI activity, native time-series import, shared
 progress and preview-layer services. Review ownership uses the
 per-open session and load generation, including when two models share a saved UUID.
 The guide distinguishes retained display from export authority and documents how
