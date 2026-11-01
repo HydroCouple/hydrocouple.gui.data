@@ -241,7 +241,7 @@ private slots:
         request.frequency.durationsMinutes = {5,10,15,30,60,120};
         request.frequency.returnPeriods = {10};
         for (double t : request.frequency.durationsMinutes)
-            request.frequency.depthsMm.append({900. * t / std::pow(t + 8., .7) / 60.});
+            request.frequency.depthsMm.append(QVector<double>{900. * t / std::pow(t + 8., .7) / 60.});
         request.depthMm = request.frequency.depthsMm.last().first();
         StormSeries series;
         QString error;
